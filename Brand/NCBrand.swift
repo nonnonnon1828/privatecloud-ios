@@ -60,26 +60,26 @@ struct NextcloudVersion: Comparable {
 final class NCBrandOptions: @unchecked Sendable {
     static let shared = NCBrandOptions()
 
-    var brand: String = "Nextcloud"
-    var brandUserAgent: String = ""
-    var textCopyrightNextcloudiOS: String = "Nextcloud Matheria for iOS %@ © 2026"
+    var brand: String = "PrivateCloud"
+    var brandUserAgent: String = "PrivateCloud"
+    var textCopyrightNextcloudiOS: String = "PrivateCloud for iOS %@ © 2026"
     var textCopyrightNextcloudServer: String = "Nextcloud Server %@"
-    var loginBaseUrl: String = "https://cloud.nextcloud.com"
+    var loginBaseUrl: String = "https://sv1-cloud.ymnk-private-connect.com"
     var pushNotificationServerProxy: String = ""
-    var linkLoginHost: String = "https://nextcloud.com/install"
-    var linkloginPreferredProviders: String = "https://nextcloud.com/signup-ios"
+    var linkLoginHost: String = ""
+    var linkloginPreferredProviders: String = ""
     var webLoginAutenticationProtocol: String = "nc://"                                        // example "abc://"
-    var privacy: String = "https://nextcloud.com/privacy"
-    var sourceCode: String = "https://github.com/nextcloud/ios"
+    var privacy: String = ""
+    var sourceCode: String = "https://github.com/nonnonnon1828/privatecloud-ios"
     var mobileconfig: String = "/remote.php/dav/provisioning/apple-provisioning.mobileconfig"
-    var appStoreUrl: String = "https://apps.apple.com/in/app/nextcloud/id1125420102"
+    var appStoreUrl: String = ""
 
     // Auto Upload default folder
     var folderDefaultAutoUpload: String = "Photos"
 
     // Capabilities Group
-    var capabilitiesGroup: String = "group.it.twsweb.Crypto-Cloud"
-    var capabilitiesGroupApps: String = "group.com.nextcloud.apps"
+    var capabilitiesGroup: String = "group.com.ymnknet.privatecloud"
+    var capabilitiesGroupApps: String = "group.com.ymnknet.privatecloud"
 
     // BRAND ONLY
     var use_AppConfig: Bool = false                                                         // Don't touch me !!
@@ -87,22 +87,21 @@ final class NCBrandOptions: @unchecked Sendable {
     // Use server theming color
     var use_themingColor: Bool = true
 
-    var disable_intro: Bool = false
-    var disable_request_login_url: Bool = false
-    var disable_multiaccount: Bool = false
-    var disable_more_external_site: Bool = false
+    var disable_intro: Bool = true
+    var disable_request_login_url: Bool = true
+    var disable_multiaccount: Bool = true
+    var disable_more_external_site: Bool = true
     var disable_openin_file: Bool = false                                                       // Don't touch me !!
-    var disable_crash_service: Bool = false
+    var disable_crash_service: Bool = true
     var disable_log: Bool = false
-    var disable_mobileconfig: Bool = false  
-    var disable_show_more_nextcloud_apps_in_settings: Bool = false
+    var disable_mobileconfig: Bool = true
+    var disable_show_more_nextcloud_apps_in_settings: Bool = true
     var doNotAskPasscodeAtStartup: Bool = false
-    var disable_source_code_in_settings: Bool = false
+    var disable_source_code_in_settings: Bool = true
     var enforce_passcode_lock = false
     var enforce_privacyScreenEnabled = false
 
-    // Example: (name: "Name 1", url: "https://cloud.nextcloud.com"),(name: "Name 2", url: "https://cloud.nextcloud.com")
-    var enforce_servers: [(name: String, url: String)] = []
+    var enforce_servers: [(name: String, url: String)] = [(name: "PrivateCloud", url: "https://sv1-cloud.ymnk-private-connect.com")]
 
     // Internal option behaviour
     var cleanUpDay: Int = 0 // Set default "Delete all cached files older than". Possible days value are: 0, 1, 7, 30, 90, 180, 365

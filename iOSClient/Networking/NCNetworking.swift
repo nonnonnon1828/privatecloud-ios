@@ -12,9 +12,19 @@ import UIKit
 import NextcloudKit
 import Alamofire
 
-protocol ClientCertificateDelegate: AnyObject {
-    func onIncorrectPassword()
-    func didAskForClientCertificate()
+enum MDMCertificate {
+    static func findIdentityCredential() -> URLCredential? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassIdentity,
+            kSecReturnRef as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else { return nil }
+        let identity = result as! SecIdentity
+        return URLCredential(identity: identity, certificates: nil, persistence: .forSession)
+    }
 }
 
 protocol NCTransferDelegate: AnyObject {
@@ -61,9 +71,6 @@ class NCNetworking: @unchecked Sendable, NextcloudKitDelegate {
 
     var lastReachability: Bool = true
     var networkReachability: NKTypeReachability?
-    weak var certificateDelegate: ClientCertificateDelegate?
-    var p12Data: Data?
-    var p12Password: String?
 
     internal var sceneIdentifier: String = ""
     internal var controller: UIViewController?
@@ -106,30 +113,23 @@ class NCNetworking: @unchecked Sendable, NextcloudKitDelegate {
     func authenticationChallenge(_ session: URLSession,
                                  didReceive challenge: URLAuthenticationChallenge,
                                  completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
+            if let credential = MDMCertificate.findIdentityCredential() {
+                completionHandler(.useCredential, credential)
+            } else {
+                completionHandler(.performDefaultHandling, nil)
+            }
+            return
+        }
 #if EXTENSION
         if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
            let serverTrust = challenge.protectionSpace.serverTrust {
-            let credential = URLCredential(trust: serverTrust)
-            completionHandler(.useCredential, credential)
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
         } else {
             completionHandler(.performDefaultHandling, nil)
         }
 #else
-        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
-            if let p12Data = self.p12Data,
-               let cert = (p12Data, self.p12Password) as? UserCertificate,
-               let pkcs12 = try? PKCS12(pkcs12Data: cert.data, password: cert.password, onIncorrectPassword: {
-                   self.certificateDelegate?.onIncorrectPassword()
-               }) {
-                let creds = PKCS12.urlCredential(for: pkcs12)
-                completionHandler(URLSession.AuthChallengeDisposition.useCredential, creds)
-            } else {
-                self.certificateDelegate?.didAskForClientCertificate()
-                completionHandler(URLSession.AuthChallengeDisposition.cancelAuthenticationChallenge, nil)
-            }
-        } else {
-            self.checkTrustedChallenge(session, didReceive: challenge, completionHandler: completionHandler)
-        }
+        self.checkTrustedChallenge(session, didReceive: challenge, completionHandler: completionHandler)
 #endif
     }
 
@@ -244,9 +244,6 @@ class NCNetworking: @unchecked Sendable, NextcloudKitDelegate {
         BIO_free(mem)
     }
 
-    func activeAccountCertificate(account: String) {
-        (self.p12Data, self.p12Password) = NCPreferences().getClientCertificate(account: account)
-    }
 #endif
 
 #if !EXTENSION

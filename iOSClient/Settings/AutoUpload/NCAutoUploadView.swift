@@ -301,32 +301,36 @@ struct NCAutoUploadView: View {
 
     @ViewBuilder
     var autoUploadStartButton: some View {
-        Section(content: {
-            let toggle = Toggle(isOn: model.autoUploadSinceDate != nil || model.autoUploadStart ? $model.autoUploadStart : $showUploadAllPhotosWarning) {
-                Text(model.autoUploadStart ? "_stop_autoupload_" : "_start_autoupload_")
-                    .font(.body)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-            }
-            .cappedFont(.body, maxDynamicType: .accessibility2)
-            .tint(Color(NCBrandColor.shared.getElement(account: model.session.account)))
-            .onChange(of: model.autoUploadStart) { _, newValue in
-                    albumModel.populateSelectedAlbums()
-                    model.handleAutoUploadChange(newValue: newValue, assetCollections: albumModel.selectedAlbums)
-            }
-            .font(.headline)
+        if NCBrandOptions.shared.enforce_servers.count == 1, model.autoUploadStart {
+            EmptyView()
+        } else {
+            Section(content: {
+                let toggle = Toggle(isOn: model.autoUploadSinceDate != nil || model.autoUploadStart ? $model.autoUploadStart : $showUploadAllPhotosWarning) {
+                    Text(model.autoUploadStart ? "_stop_autoupload_" : "_start_autoupload_")
+                        .font(.body)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                }
+                .cappedFont(.body, maxDynamicType: .accessibility2)
+                .tint(Color(NCBrandColor.shared.getElement(account: model.session.account)))
+                .onChange(of: model.autoUploadStart) { _, newValue in
+                        albumModel.populateSelectedAlbums()
+                        model.handleAutoUploadChange(newValue: newValue, assetCollections: albumModel.selectedAlbums)
+                }
+                .font(.headline)
 
-            if #available(iOS 26.0, *) {
-                toggle
-                    .font(.body)
-                    .toggleStyle(.button)
-                    .buttonStyle(.glass)
-            } else {
-                toggle
-                    .font(.body)
-                    .toggleStyle(AutoUploadProminentButtonStyle(model: model))
-            }
-        })
+                if #available(iOS 26.0, *) {
+                    toggle
+                        .font(.body)
+                        .toggleStyle(.button)
+                        .buttonStyle(.glass)
+                } else {
+                    toggle
+                        .font(.body)
+                        .toggleStyle(AutoUploadProminentButtonStyle(model: model))
+                }
+            })
+        }
     }
 
     private func updateAutoUploadCounterSubscription() {

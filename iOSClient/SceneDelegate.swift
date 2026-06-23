@@ -9,6 +9,7 @@ import WidgetKit
 import SwiftUI
 import CoreLocation
 import LucidBanner
+import Photos
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
@@ -136,9 +137,6 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                                      activeTblAccount: tableAccount,
                                      withActivateSceneForAccount activateSceneForAccount: Bool) {
         nkLog(debug: "Account active \(activeTblAccount.account)")
-
-        // Networking Certificate
-        NCNetworking.shared.activeAccountCertificate(account: activeTblAccount.account)
 
         Task {
             if let capabilities = await NCManageDatabase.shared.getCapabilities(account: activeTblAccount.account) {
@@ -540,6 +538,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         Task {
             try? await Task.sleep(for: .seconds(1))
 
+            if UserDefaults.standard.bool(forKey: "PrivateCloudNeedsPhotoSetup") {
+                await self.runFirstLaunchPhotoSetup(controller: controller)
+            }
+
             let num = await NCAutoUpload.shared.initAutoUpload()
             nkLog(start: "Auto upload with \(num) photo")
 
@@ -551,6 +553,37 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
 
         NotificationCenter.default.postOnMainThread(name: global.notificationCenterRichdocumentGrabFocus)
+    }
+
+    @MainActor
+    private func runFirstLaunchPhotoSetup(controller: NCMainTabBarController?) async {
+        let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        guard status == .authorized || status == .limited else {
+            UserDefaults.standard.set(false, forKey: "PrivateCloudNeedsPhotoSetup")
+            return
+        }
+
+        let confirmed = await withCheckedContinuation { continuation in
+            let alert = UIAlertController(
+                title: NSLocalizedString("_autoupload_photos_title_", comment: ""),
+                message: NSLocalizedString("_autoupload_photos_message_", comment: ""),
+                preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: NSLocalizedString("_ok_", comment: ""), style: .default) { _ in
+                continuation.resume(returning: true)
+            })
+            alert.addAction(UIAlertAction(title: NSLocalizedString("_cancel_", comment: ""), style: .cancel) { _ in
+                continuation.resume(returning: false)
+            })
+            let presenter = controller ?? UIApplication.shared.mainAppWindow?.rootViewController
+            presenter?.present(alert, animated: true)
+        }
+
+        UserDefaults.standard.set(false, forKey: "PrivateCloudNeedsPhotoSetup")
+
+        if !confirmed {
+            let session = NCSession.shared.getSession(controller: controller)
+            await NCManageDatabase.shared.updateAccountPropertyAsync(\.autoUploadStart, value: false, account: session.account)
+        }
     }
 }
 

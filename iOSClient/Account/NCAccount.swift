@@ -62,7 +62,13 @@ class NCAccount: NSObject {
         await changeAccount(account, userProfile: userProfile, controller: controller)
         nkLog(debug: "NCAccount changed user profile to \(userProfile.userId).")
 
-        NCPreferences().setClientCertificate(account: account, p12Data: NCNetworking.shared.p12Data, p12Password: NCNetworking.shared.p12Password)
+        await database.updateAccountPropertyAsync(\.autoUploadImage, value: true, account: account)
+        await database.updateAccountPropertyAsync(\.autoUploadVideo, value: true, account: account)
+        await database.updateAccountPropertyAsync(\.autoUploadStart, value: true, account: account)
+        await database.updateAccountPropertyAsync(\.autoUploadCreateSubfolder, value: true, account: account)
+        await database.updateAccountPropertyAsync(\.autoUploadSubfolderGranularity, value: global.subfolderGranularityYearly, account: account)
+
+        UserDefaults.standard.set(true, forKey: "PrivateCloudNeedsPhotoSetup")
 
         if let controller {
             controller.account = account
@@ -95,8 +101,6 @@ class NCAccount: NSObject {
             if let userProfile {
                 await database.setAccountUserProfileAsync(account: account, userProfile: userProfile)
             }
-            // Networking Certificate
-            NCNetworking.shared.activeAccountCertificate(account: account)
             // Subscribing Push Notification
             await NCPushNotification.shared.subscribingNextcloudServerPushNotification(account: tblAccount.account, urlBase: tblAccount.urlBase)
             // Start the service

@@ -376,10 +376,16 @@ class NCLoginProviderWebViewFallback: UIViewController, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         DispatchQueue.global().async {
-            if let serverTrust = challenge.protectionSpace.serverTrust {
+            if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
+                if let credential = MDMCertificate.findIdentityCredential() {
+                    completionHandler(.useCredential, credential)
+                } else {
+                    completionHandler(.performDefaultHandling, nil)
+                }
+            } else if let serverTrust = challenge.protectionSpace.serverTrust {
                 completionHandler(.useCredential, URLCredential(trust: serverTrust))
             } else {
-                completionHandler(.useCredential, nil)
+                completionHandler(.performDefaultHandling, nil)
             }
         }
     }

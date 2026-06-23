@@ -22,11 +22,9 @@ class FileProviderItem: NSObject, NSFileProviderItem {
     }
     var capabilities: NSFileProviderItemCapabilities {
         if metadata.directory {
-            return [ .allowsAddingSubItems, .allowsContentEnumerating, .allowsReading, .allowsDeleting, .allowsRenaming ]
-        } else if metadata.lock {
-            return [ .allowsReading ]
+            return [ .allowsAddingSubItems, .allowsContentEnumerating, .allowsReading ]
         }
-        return [ .allowsWriting, .allowsReading, .allowsDeleting, .allowsRenaming, .allowsReparenting ]
+        return [ .allowsWriting ]
     }
     /// Managing Content
     var childItemCount: NSNumber? {
@@ -58,15 +56,7 @@ class FileProviderItem: NSObject, NSFileProviderItem {
         return metadata.etag.data(using: .utf8)
     }
     var isMostRecentVersionDownloaded: Bool {
-        if metadata.directory {
-            return true
-        }
-        let path = NCUtilityFileSystem().getDirectoryProviderStorageOcId(metadata.ocId, fileName: metadata.fileName, userId: metadata.userId, urlBase: metadata.urlBase)
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-                  let fileSize = attributes[.size] as? UInt64 else {
-                return false
-            }
-        return fileSize > 0
+        return metadata.directory
     }
     /// Monitoring File Transfers
     var isUploading: Bool {
@@ -94,15 +84,7 @@ class FileProviderItem: NSObject, NSFileProviderItem {
         }
     }
     var isDownloaded: Bool {
-        if metadata.directory {
-            return true
-        }
-        let path = NCUtilityFileSystem().getDirectoryProviderStorageOcId(metadata.ocId, fileName: metadata.fileName, userId: metadata.userId, urlBase: metadata.urlBase)
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-                  let fileSize = attributes[.size] as? UInt64 else {
-                return false
-            }
-        return fileSize > 0
+        return metadata.directory
     }
     var downloadingError: Error? {
         if metadata.status == NCGlobal.shared.metadataStatusDownloadError {

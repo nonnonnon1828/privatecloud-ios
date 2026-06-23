@@ -122,7 +122,7 @@
       launchAutomaticallySubstyle = "2">
       <RemoteRunnable
          runnableDebuggingMode = "1"
-         BundleIdentifier = "it.twsweb.Nextcloud"
+         BundleIdentifier = "com.ymnknet.privatecloud"
          RemotePath = "/Users/marinofaggiana/Library/Developer/CoreSimulator/Devices/F424A0A4-ADE0-4955-969F-C6426054B5C6/data/Containers/Bundle/Application/76DC966F-BA80-4ECE-B970-4FCAF9F503D8/Nextcloud.app">
       </RemoteRunnable>
       <MacroExpansion>

@@ -42,6 +42,14 @@ final class NCConfigServer: NSObject, UIActionSheetDelegate, URLSessionDelegate 
     }
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
+            if let credential = MDMCertificate.findIdentityCredential() {
+                completionHandler(.useCredential, credential)
+            } else {
+                completionHandler(.performDefaultHandling, nil)
+            }
+            return
+        }
         NCNetworking.shared.checkTrustedChallenge(session, didReceive: challenge, completionHandler: completionHandler)
     }
 

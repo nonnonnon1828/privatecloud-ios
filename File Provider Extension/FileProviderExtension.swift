@@ -114,72 +114,7 @@ final class FileProviderExtension: NSFileProviderExtension {
     }
 
     override func startProvidingItem(at url: URL, completionHandler: @escaping ((_ error: Error?) -> Void)) {
-        Task {
-            autoreleasepool {
-                Task {
-                    let backgroundSession = NKBackground(nkCommonInstance: NextcloudKit.shared.nkCommonInstance)
-                    let pathComponents = url.pathComponents
-                    let utilityFileSystem = NCUtilityFileSystem()
-                    let itemIdentifier = NSFileProviderItemIdentifier(pathComponents[pathComponents.count - 2])
-                    guard let metadata = await NCManageDatabase.shared.getMetadataFromOcIdAndocIdTransferAsync(itemIdentifier.rawValue) else {
-                        completionHandler(NSFileProviderError(.noSuchItem))
-                        return
-                    }
-
-                    if metadata.directory || !metadata.session.isEmpty {
-                        completionHandler(nil)
-                        return
-                    }
-
-                    let serverUrlFileName = utilityFileSystem.createServerUrl(serverUrl: metadata.serverUrl, fileName: metadata.fileName)
-                    let fileNameLocalPath = utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId, fileName: metadata.fileName, userId: metadata.userId, urlBase: metadata.urlBase)
-                    let account = metadata.account
-                    let ocId = metadata.ocId
-
-                    // Exists
-                    if let tableLocalFile = await NCManageDatabase.shared.getTableLocalFileAsync(predicate: NSPredicate(format: "ocId == %@", metadata.ocId)),
-                       NCUtilityFileSystem().fileProviderStorageExists(metadata),
-                       tableLocalFile.etag == metadata.etag {
-                        completionHandler(nil)
-                        return
-                    }
-
-                    await FileProviderData.shared.signalEnumerator(ocId: ocId, type: .update)
-
-                    let (task, error) = backgroundSession.download(serverUrlFileName: serverUrlFileName,
-                                                                   fileNameLocalPath: fileNameLocalPath,
-                                                                   account: account,
-                                                                   automaticResume: false,
-                                                                   sessionIdentifier: NCNetworking.shared.sessionDownloadBackgroundExt)
-
-                    if let task, error == .success {
-                        await NCManageDatabase.shared.setMetadataSessionAsync(
-                            ocId: metadata.ocId,
-                            session: NCNetworking.shared.sessionDownload,
-                            sessionTaskIdentifier: task.taskIdentifier,
-                            sessionError: "",
-                            selector: "",
-                            status: NCGlobal.shared.metadataStatusDownloading)
-                        do {
-                            if let domain = self.domain,
-                               let manager = NSFileProviderManager(for: domain) {
-                                try await manager.register(task, forItemWithIdentifier: NSFileProviderItemIdentifier(itemIdentifier.rawValue))
-                            } else {
-                                try await NSFileProviderManager.default.register(task, forItemWithIdentifier: NSFileProviderItemIdentifier(itemIdentifier.rawValue))
-                            }
-                        } catch {
-                            print(error)
-                        }
-
-                        await FileProviderData.shared.signalEnumerator(ocId: metadata.ocId, type: .update)
-
-                        FileProviderData.shared.downloadPendingCompletionHandlers[task.taskIdentifier] = completionHandler
-
-                        task.resume()
-                    }
-                }
-            }
-        }
+        completionHandler(NSFileProviderError(.noSuchItem))
     }
 
     override func itemChanged(at url: URL) {

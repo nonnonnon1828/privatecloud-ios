@@ -1,0 +1,32 @@
+workflows:
+  privatecloud-ios:
+    name: PrivateCloud iOS
+    max_build_duration: 45
+    instance_type: mac_mini_m2
+    environment:
+      ios_signing:
+        distribution_type: ad_hoc
+        bundle_identifier:
+          - com.ymnknet.privatecloud
+          - com.ymnknet.privatecloud.File-Provider-Extension
+          - com.ymnknet.privatecloud.File-Provider-Extension-UI
+          - com.ymnknet.privatecloud.Share
+          - com.ymnknet.privatecloud.Notification-Service-Extension
+          - com.ymnknet.privatecloud.Widget
+          - com.ymnknet.privatecloud.WidgetDashboardIntentHandler
+          - com.ymnknet.privatecloud.Action-Assistant
+      vars:
+        XCODE_PROJECT: "Nextcloud.xcodeproj"
+        XCODE_SCHEME: "Nextcloud"
+      xcode: latest
+    scripts:
+      - name: Set up code signing
+        script: xcode-project use-profiles
+      - name: Build IPA
+        script: |
+          xcode-project build-ipa \
+            --project "$CM_BUILD_DIR/$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log

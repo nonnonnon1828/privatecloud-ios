@@ -4,8 +4,8 @@
 <dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>com.nextcloud.refreshTask</string>
-		<string>com.nextcloud.processingTask</string>
+		<string>com.ymnknet.privatecloud.refreshTask</string>
+		<string>com.ymnknet.privatecloud.processingTask</string>
 	</array>
 	<key>CFBundleAllowMixedLocalizations</key>
 	<true/>
@@ -33,7 +33,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>it.twsweb.Nextcloud</string>
+			<string>com.ymnknet.privatecloud</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>nextcloud</string>

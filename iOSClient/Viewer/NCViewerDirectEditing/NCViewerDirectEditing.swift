@@ -193,10 +193,16 @@ class NCViewerDirectEditing: UIViewController, WKNavigationDelegate, WKScriptMes
 
     public func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         DispatchQueue.global().async {
-            if let serverTrust = challenge.protectionSpace.serverTrust {
-                completionHandler(Foundation.URLSession.AuthChallengeDisposition.useCredential, URLCredential(trust: serverTrust))
+            if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
+                if let credential = MDMCertificate.findIdentityCredential() {
+                    completionHandler(.useCredential, credential)
+                } else {
+                    completionHandler(.performDefaultHandling, nil)
+                }
+            } else if let serverTrust = challenge.protectionSpace.serverTrust {
+                completionHandler(.useCredential, URLCredential(trust: serverTrust))
             } else {
-                completionHandler(URLSession.AuthChallengeDisposition.useCredential, nil)
+                completionHandler(.performDefaultHandling, nil)
             }
         }
     }

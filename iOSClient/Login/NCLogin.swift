@@ -41,9 +41,8 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
     var configPassword: String?
     var configAppPassword: String?
 
-    private var p12Data: Data?
-    private var p12Password: String?
     private var QRCodeCheck: Bool = false
+    private var didAutoLogin: Bool = false
     private var activeLoginProvider: NCLoginProvider?
 
     // LucidBanner
@@ -151,7 +150,14 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
 
         let enforceServers = NCBrandOptions.shared.enforce_servers
 
-        if !enforceServers.isEmpty {
+        if enforceServers.count == 1 {
+            baseUrlTextField.isHidden = true
+            enforceServersDropdownImage.isHidden = true
+            enforceServersButton.isHidden = false
+            enforceServersButton.isUserInteractionEnabled = false
+            enforceServersButton.setTitle(enforceServers[0].name, for: .normal)
+            baseUrlTextField.text = enforceServers[0].url
+        } else if !enforceServers.isEmpty {
             baseUrlTextField.isHidden = true
             enforceServersDropdownImage.isHidden = false
             enforceServersButton.isHidden = false
@@ -174,7 +180,6 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
             }
         }
 
-        NCNetworking.shared.certificateDelegate = self
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -203,6 +208,13 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
                                   subtitle: subtitle) {
                 self.openShareAccountsViewController(nil)
             }
+        }
+
+        if !didAutoLogin,
+           NCBrandOptions.shared.enforce_servers.count == 1,
+           NCManageDatabase.shared.getAllTableAccount().isEmpty {
+            didAutoLogin = true
+            login()
         }
     }
 
@@ -289,8 +301,6 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
     }
 
     @IBAction func actionButtonLogin(_ sender: Any) {
-        NCNetworking.shared.p12Data = nil
-        NCNetworking.shared.p12Password = nil
         login()
     }
 
@@ -475,47 +485,6 @@ extension NCLogin: NCShareAccountsDelegate {
 }
 
 // MARK: - UIDocumentPickerDelegate
-
-extension NCLogin: ClientCertificateDelegate, UIDocumentPickerDelegate {
-    func didAskForClientCertificate() {
-        let alertNoCertFound = UIAlertController(title: NSLocalizedString("_no_client_cert_found_", comment: ""), message: NSLocalizedString("_no_client_cert_found_desc_", comment: ""), preferredStyle: .alert)
-        alertNoCertFound.addAction(UIAlertAction(title: NSLocalizedString("_cancel_", comment: ""), style: .cancel, handler: nil))
-        alertNoCertFound.addAction(UIAlertAction(title: NSLocalizedString("_ok_", comment: ""), style: .default, handler: { _ in
-            let documentProviderMenu = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.pkcs12])
-            documentProviderMenu.delegate = self
-            self.present(documentProviderMenu, animated: true, completion: nil)
-        }))
-        DispatchQueue.main.async {
-            self.present(alertNoCertFound, animated: true)
-        }
-    }
-
-    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        let alertEnterPassword = UIAlertController(title: NSLocalizedString("_client_cert_enter_password_", comment: ""), message: "", preferredStyle: .alert)
-        alertEnterPassword.addAction(UIAlertAction(title: NSLocalizedString("_cancel_", comment: ""), style: .cancel, handler: nil))
-        alertEnterPassword.addAction(UIAlertAction(title: NSLocalizedString("_ok_", comment: ""), style: .default, handler: { _ in
-            NCNetworking.shared.p12Data = try? Data(contentsOf: urls[0])
-            NCNetworking.shared.p12Password = alertEnterPassword.textFields?[0].text
-            self.login()
-        }))
-        alertEnterPassword.addTextField { textField in
-            textField.isSecureTextEntry = true
-        }
-        DispatchQueue.main.async {
-            self.present(alertEnterPassword, animated: true)
-        }
-    }
-
-    func onIncorrectPassword() {
-        NCNetworking.shared.p12Data = nil
-        NCNetworking.shared.p12Password = nil
-        let alertWrongPassword = UIAlertController(title: NSLocalizedString("_client_cert_wrong_password_", comment: ""), message: "", preferredStyle: .alert)
-        alertWrongPassword.addAction(UIAlertAction(title: NSLocalizedString("_ok_", comment: ""), style: .default))
-        DispatchQueue.main.async {
-            self.present(alertWrongPassword, animated: true)
-        }
-    }
-}
 
 // MARK: - NCLoginProviderDelegate
 

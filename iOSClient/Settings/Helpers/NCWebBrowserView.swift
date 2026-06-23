@@ -71,10 +71,16 @@ struct WebView: UIViewRepresentable {
             self.parent = parent
         }
         public func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-            if let serverTrust = challenge.protectionSpace.serverTrust {
+            if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
+                if let credential = MDMCertificate.findIdentityCredential() {
+                    completionHandler(.useCredential, credential)
+                } else {
+                    completionHandler(.performDefaultHandling, nil)
+                }
+            } else if let serverTrust = challenge.protectionSpace.serverTrust {
                 completionHandler(.useCredential, URLCredential(trust: serverTrust))
             } else {
-                completionHandler(.useCredential, nil)
+                completionHandler(.performDefaultHandling, nil)
             }
         }
         public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
