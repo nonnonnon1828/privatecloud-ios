@@ -53,25 +53,38 @@ workflows:
       - name: Delete stale Development certificates
         script: |
           python3 << 'PYEOF'
-          import json, os, sys, time
+          import base64, json, os, subprocess, sys, time
           from urllib.request import Request, urlopen
           from urllib.error import HTTPError
-          try:
-              import jwt
-          except ImportError:
-              import subprocess
-              subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'PyJWT[crypto]', '-q'])
-              import jwt
+
+          def b64url(data):
+              if isinstance(data, str): data = data.encode()
+              return base64.urlsafe_b64encode(data).rstrip(b'=').decode()
+
+          def der_to_raw(der):
+              """DER ECDSA sig -> raw (r||s) 64 bytes for ES256 JWT."""
+              assert der[0] == 0x30
+              pos = 2
+              parts = []
+              for _ in range(2):
+                  assert der[pos] == 0x02
+                  ln = der[pos+1]; val = der[pos+2:pos+2+ln]
+                  if val[0] == 0 and len(val) > 1: val = val[1:]
+                  parts.append(b'\x00'*(32-len(val)) + val)
+                  pos += 2 + ln
+              return parts[0] + parts[1]
+
           key_id = os.environ['APP_STORE_CONNECT_KEY_IDENTIFIER']
           issuer_id = os.environ['APP_STORE_CONNECT_ISSUER_ID']
-          with open('/tmp/AuthKey.p8') as f:
-              private_key = f.read()
-          token = jwt.encode(
-              {'iss': issuer_id, 'iat': int(time.time()), 'exp': int(time.time()) + 1200,
-               'aud': 'appstoreconnect-v1'},
-              private_key, algorithm='ES256', headers={'kid': key_id})
-          if isinstance(token, bytes):
-              token = token.decode()
+          now = int(time.time())
+          hdr = b64url(json.dumps({"alg":"ES256","kid":key_id,"typ":"JWT"},separators=(',',':')))
+          pay = b64url(json.dumps({"iss":issuer_id,"iat":now,"exp":now+1200,"aud":"appstoreconnect-v1"},separators=(',',':')))
+          msg = f"{hdr}.{pay}"
+          der = subprocess.run(
+              ['openssl','dgst','-sha256','-sign','/tmp/AuthKey.p8'],
+              input=msg.encode(), capture_output=True, check=True).stdout
+          token = f"{msg}.{b64url(der_to_raw(der))}"
+
           auth = {'Authorization': f'Bearer {token}'}
           deleted = 0
           for cert_type in ['DEVELOPMENT', 'IOS_DEVELOPMENT']:
