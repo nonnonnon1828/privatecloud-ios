@@ -12,30 +12,88 @@ workflows:
         APP_STORE_CONNECT_KEY_IDENTIFIER: 82H5J855MP
         APP_STORE_CONNECT_ISSUER_ID: 5cb3a482-8441-442e-a748-62ef51dc132d
         BUNDLE_ID: "com.ymnknet.privatecloud"
+        TEAM_ID: "MU4CY2V7WU"
       xcode: latest
     scripts:
-      - name: Fetch signing files
-        script: |
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --platform IOS \
-            --type IOS_APP_ADHOC \
-            --create
-      - name: Set up keychain and profiles
+      - name: Set up keychain with certificates
         script: |
           keychain initialize
           app-store-connect certificates list \
             --type IOS_DISTRIBUTION \
             --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
             --save
+          app-store-connect certificates list \
+            --type IOS_DEVELOPMENT \
+            --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
+            --save || true
           keychain add-certificates
-          xcode-project use-profiles
+      - name: Write ASC API key for Xcode
+        script: |
+          python3 << 'PYEOF'
+          import os, sys
+          key = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '')
+          if '\\n' in key and '\n' not in key.replace('\\n', ''):
+              key = key.replace('\\n', '\n')
+          if not key.strip():
+              print("ERROR: APP_STORE_CONNECT_PRIVATE_KEY is empty", file=sys.stderr)
+              sys.exit(1)
+          path = '/tmp/AuthKey.p8'
+          with open(path, 'w') as f:
+              f.write(key)
+              if not key.endswith('\n'):
+                  f.write('\n')
+          with open(path) as f:
+              content = f.read()
+          lines = content.strip().split('\n')
+          print(f"Key file: {len(lines)} lines")
+          if 'BEGIN PRIVATE KEY' not in lines[0]:
+              print(f"ERROR: unexpected first line: {lines[0][:40]}", file=sys.stderr)
+              sys.exit(1)
+          if 'END PRIVATE KEY' not in lines[-1]:
+              print(f"ERROR: unexpected last line: {lines[-1][:40]}", file=sys.stderr)
+              sys.exit(1)
+          print("ASC API key written OK")
+          PYEOF
       - name: Trust build plugins
         script: |
           defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES
-      - name: Build IPA
+      - name: Create ExportOptions plist
         script: |
-          xcode-project build-ipa \
-            --project "$CM_BUILD_DIR/$XCODE_PROJECT" \
-            --scheme "$XCODE_SCHEME"
+          /usr/libexec/PlistBuddy -c "Add :method string ad-hoc" /tmp/ExportOptions.plist
+          /usr/libexec/PlistBuddy -c "Add :signingStyle string automatic" /tmp/ExportOptions.plist
+          /usr/libexec/PlistBuddy -c "Add :teamID string $TEAM_ID" /tmp/ExportOptions.plist
+          echo "--- ExportOptions.plist ---"
+          cat /tmp/ExportOptions.plist
+      - name: Archive
+        script: |
+          set -o pipefail
+          xcodebuild archive \
+            -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -destination "generic/platform=iOS" \
+            -archivePath /tmp/Nextcloud.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath /tmp/AuthKey.p8 \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            2>&1 | tee /tmp/xcodebuild_archive.log || {
+              echo "=== ARCHIVE ERRORS ==="
+              grep -i 'error:' /tmp/xcodebuild_archive.log | tail -30
+              exit 1
+            }
+      - name: Export IPA
+        script: |
+          xcodebuild -exportArchive \
+            -archivePath /tmp/Nextcloud.xcarchive \
+            -exportPath "$CM_BUILD_DIR/build/ios/ipa" \
+            -exportOptionsPlist /tmp/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath /tmp/AuthKey.p8 \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
     artifacts:
       - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_archive.log
