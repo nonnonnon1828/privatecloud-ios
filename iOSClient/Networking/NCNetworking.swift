@@ -21,8 +21,7 @@ enum MDMCertificate {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess else { return nil }
-        let identity = result as! SecIdentity
+        guard status == errSecSuccess, let identity = result as? SecIdentity else { return nil }
         return URLCredential(identity: identity, certificates: nil, persistence: .forSession)
     }
 }
