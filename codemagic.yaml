@@ -32,7 +32,23 @@ workflows:
       - name: Set up ASC API key for Xcode
         script: |
           mkdir -p "$HOME/private_keys"
-          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8"
+          KEY_PATH="$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8"
+          python3 -c "
+          import os
+          key = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '')
+          if not key:
+              print('ERROR: APP_STORE_CONNECT_PRIVATE_KEY is empty')
+              exit(1)
+          key = key.replace(r'\n', '\n')
+          with open('$KEY_PATH', 'w') as f:
+              f.write(key)
+              if not key.endswith('\n'):
+                  f.write('\n')
+          print(f'Key written: {len(key)} bytes')
+          print(f'First line: {key.split(chr(10))[0]}')
+          print(f'Line count: {len(key.split(chr(10)))}')
+          "
+          ls -la "$KEY_PATH"
       - name: Archive
         script: |
           set -o pipefail
