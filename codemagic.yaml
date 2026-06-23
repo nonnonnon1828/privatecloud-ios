@@ -14,42 +14,25 @@ workflows:
         BUNDLE_ID: "com.ymnknet.privatecloud"
       xcode: latest
     scripts:
-      - name: Set up keychain with certificates
+      - name: Fetch signing files
+        script: |
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --platform IOS \
+            --type IOS_APP_ADHOC \
+            --create
+      - name: Set up keychain and profiles
         script: |
           keychain initialize
           app-store-connect certificates list \
             --type IOS_DISTRIBUTION \
             --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
             --save
-          app-store-connect certificates list \
-            --type DEVELOPMENT \
-            --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
-            --save
           keychain add-certificates
+          xcode-project use-profiles
       - name: Trust build plugins
         script: |
           defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES
-      - name: Set up ASC API key for Xcode
-        script: |
-          mkdir -p "$HOME/private_keys"
-          KEY_PATH="$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8"
-          python3 -c "
-          import os
-          key = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '')
-          if not key:
-              print('ERROR: APP_STORE_CONNECT_PRIVATE_KEY is empty')
-              exit(1)
-          key = key.replace(r'\n', '\n')
-          with open('$KEY_PATH', 'w') as f:
-              f.write(key)
-              if not key.endswith('\n'):
-                  f.write('\n')
-          print(f'Key written: {len(key)} bytes')
-          print(f'First line: {key.split(chr(10))[0]}')
-          print(f'Line count: {len(key.split(chr(10)))}')
-          "
-          ls -la "$KEY_PATH"
-      - name: Archive
+      - name: Build IPA
         script: |
           set -o pipefail
           xcodebuild -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
@@ -57,12 +40,10 @@ workflows:
             -destination "generic/platform=iOS" \
             -archivePath "$CM_BUILD_DIR/build/ios/xcarchive/Nextcloud.xcarchive" \
             archive \
-            CODE_SIGN_STYLE=Automatic \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             DEVELOPMENT_TEAM=MU4CY2V7WU \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8" \
-            -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGN_STYLE=Manual \
             2>&1 | tee /tmp/xcodebuild_archive.log || {
               echo "=== ERRORS ==="
               grep -i 'error:' /tmp/xcodebuild_archive.log | tail -50
@@ -70,7 +51,10 @@ workflows:
             }
       - name: Export IPA
         script: |
-          cat > /tmp/ExportOptions.plist << 'PLIST'
+          xcodebuild -exportArchive \
+            -archivePath "$CM_BUILD_DIR/build/ios/xcarchive/Nextcloud.xcarchive" \
+            -exportPath "$CM_BUILD_DIR/build/ios/ipa" \
+            -exportOptionsPlist <(cat << 'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -82,14 +66,7 @@ workflows:
           </dict>
           </plist>
           PLIST
-          xcodebuild -exportArchive \
-            -archivePath "$CM_BUILD_DIR/build/ios/xcarchive/Nextcloud.xcarchive" \
-            -exportPath "$CM_BUILD_DIR/build/ios/ipa" \
-            -exportOptionsPlist /tmp/ExportOptions.plist \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8" \
-            -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+          )
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_archive.log
