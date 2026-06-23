@@ -17,7 +17,7 @@ workflows:
       - name: Set up keychain
         script: |
           keychain initialize
-          app-store-connect list-certificates \
+          app-store-connect certificates list \
             --type IOS_DISTRIBUTION \
             --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
             --save
