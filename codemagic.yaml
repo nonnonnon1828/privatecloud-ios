@@ -10,6 +10,8 @@ workflows:
       vars:
         XCODE_PROJECT: "Nextcloud.xcodeproj"
         XCODE_SCHEME: "Nextcloud"
+        APP_STORE_CONNECT_KEY_IDENTIFIER: 82H5J855MP
+        APP_STORE_CONNECT_ISSUER_ID: 5cb3a482-8441-442e-a748-62ef51dc132d
       xcode: latest
     scripts:
       - name: Set up code signing
