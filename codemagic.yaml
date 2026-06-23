@@ -28,6 +28,9 @@ workflows:
             --save
           keychain add-certificates
           xcode-project use-profiles
+      - name: Trust build plugins
+        script: |
+          defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES
       - name: Build IPA
         script: |
           xcode-project build-ipa \
