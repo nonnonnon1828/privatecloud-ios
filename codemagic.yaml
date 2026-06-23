@@ -6,7 +6,7 @@ workflows:
     environment:
       ios_signing:
         distribution_type: ad_hoc
-        bundle_identifier: com.ymnknet.privatecloud*
+        bundle_identifier: com.ymnknet.privatecloud
       vars:
         XCODE_PROJECT: "Nextcloud.xcodeproj"
         XCODE_SCHEME: "Nextcloud"
