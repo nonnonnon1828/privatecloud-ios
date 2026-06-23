@@ -14,25 +14,26 @@ workflows:
         BUNDLE_ID: "com.ymnknet.privatecloud"
       xcode: latest
     scripts:
-      - name: Fetch signing files
-        script: |
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --platform IOS \
-            --type IOS_APP_ADHOC \
-            --create
-      - name: Set up keychain and profiles
+      - name: Set up keychain with certificates
         script: |
           keychain initialize
           app-store-connect certificates list \
             --type IOS_DISTRIBUTION \
             --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
             --save
+          app-store-connect certificates list \
+            --type DEVELOPMENT \
+            --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
+            --save
           keychain add-certificates
-          xcode-project use-profiles
       - name: Trust build plugins
         script: |
           defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES
-      - name: Build IPA
+      - name: Set up ASC API key for Xcode
+        script: |
+          mkdir -p "$HOME/private_keys"
+          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8"
+      - name: Archive
         script: |
           set -o pipefail
           xcodebuild -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
@@ -40,16 +41,39 @@ workflows:
             -destination "generic/platform=iOS" \
             -archivePath "$CM_BUILD_DIR/build/ios/xcarchive/Nextcloud.xcarchive" \
             archive \
-            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM=MU4CY2V7WU \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            CODE_SIGN_STYLE=Manual \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8" \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
             2>&1 | tee /tmp/xcodebuild_archive.log || {
               echo "=== ERRORS ==="
               grep -i 'error:' /tmp/xcodebuild_archive.log | tail -50
               exit 1
             }
+      - name: Export IPA
+        script: |
+          cat > /tmp/ExportOptions.plist << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>ad-hoc</string>
+            <key>teamID</key>
+            <string>MU4CY2V7WU</string>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$CM_BUILD_DIR/build/ios/xcarchive/Nextcloud.xcarchive" \
+            -exportPath "$CM_BUILD_DIR/build/ios/ipa" \
+            -exportOptionsPlist /tmp/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8" \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
     artifacts:
       - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
       - /tmp/xcodebuild_archive.log
