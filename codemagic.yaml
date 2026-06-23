@@ -15,17 +15,13 @@ workflows:
         TEAM_ID: "MU4CY2V7WU"
       xcode: latest
     scripts:
-      - name: Set up keychain with certificates
+      - name: Set up keychain with Distribution certificate
         script: |
           keychain initialize
           app-store-connect certificates list \
             --type IOS_DISTRIBUTION \
             --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
             --save
-          app-store-connect certificates list \
-            --type IOS_DEVELOPMENT \
-            --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
-            --save || true
           keychain add-certificates
       - name: Write ASC API key for Xcode
         script: |
@@ -53,6 +49,51 @@ workflows:
               print(f"ERROR: unexpected last line: {lines[-1][:40]}", file=sys.stderr)
               sys.exit(1)
           print("ASC API key written OK")
+          PYEOF
+      - name: Delete stale Development certificates
+        script: |
+          python3 << 'PYEOF'
+          import json, os, sys, time
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError
+          try:
+              import jwt
+          except ImportError:
+              import subprocess
+              subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'PyJWT[crypto]', '-q'])
+              import jwt
+          key_id = os.environ['APP_STORE_CONNECT_KEY_IDENTIFIER']
+          issuer_id = os.environ['APP_STORE_CONNECT_ISSUER_ID']
+          with open('/tmp/AuthKey.p8') as f:
+              private_key = f.read()
+          token = jwt.encode(
+              {'iss': issuer_id, 'iat': int(time.time()), 'exp': int(time.time()) + 1200,
+               'aud': 'appstoreconnect-v1'},
+              private_key, algorithm='ES256', headers={'kid': key_id})
+          if isinstance(token, bytes):
+              token = token.decode()
+          auth = {'Authorization': f'Bearer {token}'}
+          deleted = 0
+          for cert_type in ['DEVELOPMENT', 'IOS_DEVELOPMENT']:
+              req = Request(
+                  f'https://api.appstoreconnect.apple.com/v1/certificates?filter[certificateType]={cert_type}',
+                  headers=auth)
+              certs = json.loads(urlopen(req).read()).get('data', [])
+              for cert in certs:
+                  cid = cert['id']
+                  name = cert.get('attributes', {}).get('name', '?')
+                  try:
+                      urlopen(Request(
+                          f'https://api.appstoreconnect.apple.com/v1/certificates/{cid}',
+                          headers=auth, method='DELETE'))
+                      print(f"Deleted {cert_type} cert {cid} ({name})")
+                      deleted += 1
+                  except HTTPError as e:
+                      print(f"WARN: {cid}: {e.code} {e.reason}", file=sys.stderr)
+          if deleted:
+              print(f"Cleaned up {deleted} stale certificate(s)")
+          else:
+              print("No stale Development certificates found")
           PYEOF
       - name: Trust build plugins
         script: |
