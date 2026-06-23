@@ -6,18 +6,32 @@ workflows:
     environment:
       groups:
         - ymnknet
-      ios_signing:
-        distribution_type: ad_hoc
-        bundle_identifier: com.ymnknet.privatecloud
       vars:
         XCODE_PROJECT: "Nextcloud.xcodeproj"
         XCODE_SCHEME: "Nextcloud"
         APP_STORE_CONNECT_KEY_IDENTIFIER: 82H5J855MP
         APP_STORE_CONNECT_ISSUER_ID: 5cb3a482-8441-442e-a748-62ef51dc132d
+        BUNDLE_ID: "com.ymnknet.privatecloud"
       xcode: latest
     scripts:
-      - name: Set up code signing
-        script: xcode-project use-profiles
+      - name: Fetch signing files
+        script: |
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --platform IOS \
+            --type AD_HOC \
+            --create
+          app-store-connect fetch-signing-files "$BUNDLE_ID.*" \
+            --platform IOS \
+            --type AD_HOC \
+            --create
+      - name: Set up keychain and profiles
+        script: |
+          keychain initialize
+          app-store-connect list-certificates \
+            --type IOS_DISTRIBUTION \
+            --save
+          keychain add-certificates
+          xcode-project use-profiles
       - name: Build IPA
         script: |
           xcode-project build-ipa \
