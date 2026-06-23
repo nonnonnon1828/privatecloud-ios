@@ -27,8 +27,9 @@ workflows:
           defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES
       - name: Set up ASC API key for Xcode
         script: |
-          mkdir -p ~/private_keys
-          echo "$APP_STORE_CONNECT_PRIVATE_KEY" > ~/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8
+          mkdir -p "$HOME/private_keys"
+          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8"
+          cat "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8" | head -1
       - name: Build IPA
         script: |
           xcodebuild -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
@@ -39,7 +40,7 @@ workflows:
             CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM=MU4CY2V7WU \
             -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8 \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8" \
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
       - name: Export IPA
@@ -61,7 +62,7 @@ workflows:
             -exportPath "$CM_BUILD_DIR/build/ios/ipa" \
             -exportOptionsPlist /tmp/ExportOptions.plist \
             -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8 \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8" \
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
     artifacts:
