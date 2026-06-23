@@ -5,7 +5,7 @@ workflows:
     instance_type: mac_mini_m2
     environment:
       groups:
-        - apple_credentials
+        - ymnknet
       ios_signing:
         distribution_type: ad_hoc
         bundle_identifier: com.ymnknet.privatecloud
