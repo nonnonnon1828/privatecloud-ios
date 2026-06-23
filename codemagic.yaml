@@ -19,7 +19,8 @@ workflows:
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --platform IOS \
             --type IOS_APP_ADHOC \
-            --create
+            --create \
+            --delete-stale-profiles
       - name: Set up keychain and profiles
         script: |
           keychain initialize
