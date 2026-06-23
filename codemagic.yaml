@@ -6,15 +6,7 @@ workflows:
     environment:
       ios_signing:
         distribution_type: ad_hoc
-        bundle_identifier:
-          - com.ymnknet.privatecloud
-          - com.ymnknet.privatecloud.File-Provider-Extension
-          - com.ymnknet.privatecloud.File-Provider-Extension-UI
-          - com.ymnknet.privatecloud.Share
-          - com.ymnknet.privatecloud.Notification-Service-Extension
-          - com.ymnknet.privatecloud.Widget
-          - com.ymnknet.privatecloud.WidgetDashboardIntentHandler
-          - com.ymnknet.privatecloud.Action-Assistant
+        bundle_identifier: com.ymnknet.privatecloud*
       vars:
         XCODE_PROJECT: "Nextcloud.xcodeproj"
         XCODE_SCHEME: "Nextcloud"
