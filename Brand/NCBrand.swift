@@ -78,8 +78,8 @@ final class NCBrandOptions: @unchecked Sendable {
     var folderDefaultAutoUpload: String = "Photos"
 
     // Capabilities Group
-    var capabilitiesGroup: String = "group.com.ymnknet.privatecloud"
-    var capabilitiesGroupApps: String = "group.com.ymnknet.privatecloud"
+    var capabilitiesGroup: String = "group.com.ymnknet.privatecloud.shared"
+    var capabilitiesGroupApps: String = "group.com.ymnknet.privatecloud.shared"
 
     // BRAND ONLY
     var use_AppConfig: Bool = false                                                         // Don't touch me !!

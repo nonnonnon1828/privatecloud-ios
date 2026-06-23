@@ -33,7 +33,7 @@
         		<true/>
     		</dict>
 		<key>NSExtensionFileProviderDocumentGroup</key>
-		<string>group.com.ymnknet.privatecloud</string>
+		<string>group.com.ymnknet.privatecloud.shared</string>
 		<key>NSExtensionFileProviderSupportsEnumeration</key>
 		<true/>
 		<key>NSExtensionFileProviderSupportsPickingFolders</key>
