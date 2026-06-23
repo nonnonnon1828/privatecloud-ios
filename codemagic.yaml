@@ -18,11 +18,11 @@ workflows:
         script: |
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --platform IOS \
-            --type AD_HOC \
+            --type IOS_APP_ADHOC \
             --create
           app-store-connect fetch-signing-files "$BUNDLE_ID.*" \
             --platform IOS \
-            --type AD_HOC \
+            --type IOS_APP_ADHOC \
             --create
       - name: Set up keychain and profiles
         script: |
