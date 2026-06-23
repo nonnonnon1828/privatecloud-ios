@@ -15,14 +15,84 @@ workflows:
         TEAM_ID: "MU4CY2V7WU"
       xcode: 16.2
     scripts:
-      - name: Set up keychain with Distribution certificate
+      - name: Set up keychain and signing certificates
         script: |
           keychain initialize
+
+          # --- Generate JWT for ASC API ---
+          echo "$APP_STORE_CONNECT_PRIVATE_KEY" | tr -d '\r' > /tmp/asc_key.p8
+          if grep -q '\\n' /tmp/asc_key.p8; then
+            python3 -c "
+          import sys
+          with open('/tmp/asc_key.p8') as f: d=f.read()
+          with open('/tmp/asc_key.p8','w') as f: f.write(d.replace('\\\\n','\n'))
+          "
+          fi
+          HEADER=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$APP_STORE_CONNECT_KEY_IDENTIFIER" | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
+          NOW=$(date +%s)
+          EXP=$((NOW + 600))
+          PAYLOAD=$(printf '{"iss":"%s","iat":%d,"exp":%d,"aud":"appstoreconnect-v1"}' "$APP_STORE_CONNECT_ISSUER_ID" "$NOW" "$EXP" | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
+          SIGN_INPUT="${HEADER}.${PAYLOAD}"
+          DER_SIG=$(printf '%s' "$SIGN_INPUT" | openssl dgst -sha256 -sign /tmp/asc_key.p8 -binary | openssl base64 -e -A)
+          RAW_SIG=$(python3 << PYEOF
+          import base64
+          der = base64.b64decode("${DER_SIG}")
+          i = 2
+          r_len = der[i+1]; r = der[i+2:i+2+r_len]; i = i+2+r_len
+          s_len = der[i+1]; s = der[i+2:i+2+s_len]
+          r = r[-32:].rjust(32, b'\x00')
+          s = s[-32:].rjust(32, b'\x00')
+          import sys; sys.stdout.write(base64.urlsafe_b64encode(r+s).rstrip(b'=').decode())
+          PYEOF
+          )
+          JWT="${SIGN_INPUT}.${RAW_SIG}"
+          rm -f /tmp/asc_key.p8
+
+          # --- Delete ALL development certificates (both types) ---
+          for CERT_TYPE in DEVELOPMENT IOS_DEVELOPMENT; do
+            echo "=== Listing $CERT_TYPE certificates ==="
+            RESP=$(curl -s -H "Authorization: Bearer $JWT" \
+              "https://api.appstoreconnect.apple.com/v1/certificates?filter[certificateType]=$CERT_TYPE&limit=200")
+            COUNT=$(echo "$RESP" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('data',[])))" 2>/dev/null || echo "parse-error")
+            echo "Found $COUNT certificates of type $CERT_TYPE"
+            IDS=$(echo "$RESP" | python3 -c "import sys,json; [print(c['id']) for c in json.load(sys.stdin).get('data',[])]" 2>/dev/null || true)
+            for cid in $IDS; do
+              echo "Revoking $CERT_TYPE cert: $cid"
+              HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                -H "Authorization: Bearer $JWT" \
+                "https://api.appstoreconnect.apple.com/v1/certificates/$cid")
+              echo "  -> HTTP $HTTP"
+            done
+          done
+
+          echo "Waiting for revocation to propagate..."
+          sleep 5
+
+          # --- Fetch Distribution certificate ---
+          echo "=== Fetching IOS_DISTRIBUTION certificate ==="
           app-store-connect certificates list \
             --type IOS_DISTRIBUTION \
             --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
             --save
+
+          # --- Create fresh Development certificate with same key ---
+          echo "=== Creating new DEVELOPMENT certificate ==="
+          app-store-connect certificates create \
+            --type DEVELOPMENT \
+            --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
+            --save || {
+            echo "Create failed (may already exist), trying list..."
+            app-store-connect certificates list \
+              --type DEVELOPMENT \
+              --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
+              --save
+          }
+
+          # --- Import all certificates into keychain ---
           keychain add-certificates
+
+          echo "=== Signing identities in keychain ==="
+          security find-identity -v -p codesigning | head -20
       - name: Write ASC API key for Xcode
         script: |
           mkdir -p ~/private_keys
@@ -42,48 +112,6 @@ workflows:
                   f.write('\n')
           print(f"ASC API key written to {path}")
           PYEOF
-      - name: Delete stale Development certificates
-        script: |
-          echo "$APP_STORE_CONNECT_PRIVATE_KEY" | tr -d '\r' > /tmp/asc_key.p8
-          if grep -q '\\n' /tmp/asc_key.p8; then
-            python3 -c "
-          import sys
-          with open('/tmp/asc_key.p8') as f: d=f.read()
-          with open('/tmp/asc_key.p8','w') as f: f.write(d.replace('\\\\n','\n'))
-          "
-          fi
-          HEADER=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$APP_STORE_CONNECT_KEY_IDENTIFIER" | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
-          NOW=$(date +%s)
-          EXP=$((NOW + 600))
-          PAYLOAD=$(printf '{"iss":"%s","iat":%d,"exp":%d,"aud":"appstoreconnect-v1"}' "$APP_STORE_CONNECT_ISSUER_ID" "$NOW" "$EXP" | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
-          SIGN_INPUT="${HEADER}.${PAYLOAD}"
-          DER_SIG=$(printf '%s' "$SIGN_INPUT" | openssl dgst -sha256 -sign /tmp/asc_key.p8 -binary | openssl base64 -e -A)
-          RAW_SIG=$(python3 << PYEOF
-          import base64, struct
-          der = base64.b64decode("${DER_SIG}")
-          i = 2
-          r_len = der[i+1]; r = der[i+2:i+2+r_len]; i = i+2+r_len
-          s_len = der[i+1]; s = der[i+2:i+2+s_len]
-          r = r[-32:].rjust(32, b'\x00')
-          s = s[-32:].rjust(32, b'\x00')
-          import sys; sys.stdout.write(base64.urlsafe_b64encode(r+s).rstrip(b'=').decode())
-          PYEOF
-          )
-          JWT="${SIGN_INPUT}.${RAW_SIG}"
-          echo "Listing DEVELOPMENT certificates..."
-          RESP=$(curl -s -H "Authorization: Bearer $JWT" \
-            "https://api.appstoreconnect.apple.com/v1/certificates?filter[certificateType]=DEVELOPMENT&limit=200")
-          IDS=$(echo "$RESP" | python3 -c "import sys,json; [print(c['id']) for c in json.load(sys.stdin).get('data',[])]" 2>/dev/null || true)
-          if [ -z "$IDS" ]; then
-            echo "No stale DEVELOPMENT certificates found."
-          else
-            for cid in $IDS; do
-              echo "Deleting DEVELOPMENT cert: $cid"
-              curl -s -X DELETE -H "Authorization: Bearer $JWT" \
-                "https://api.appstoreconnect.apple.com/v1/certificates/$cid" || true
-            done
-          fi
-          rm -f /tmp/asc_key.p8
       - name: Trust build plugins
         script: |
           defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES
@@ -108,7 +136,7 @@ workflows:
               echo "========================================="
               echo "ARCHIVE FAILED - key error lines:"
               echo "========================================="
-              grep -iE '(error:|failed to|provision|sign|entitlement|capability|authentication|no profile)' /tmp/xcodebuild_archive.log | tail -50
+              grep -iE '(error:|failed to|provision|sign|entitlement|capability|authentication|no profile|revoke)' /tmp/xcodebuild_archive.log | tail -50
               exit 1
             }
       - name: Export ad-hoc IPA
