@@ -13,12 +13,10 @@ workflows:
         APP_STORE_CONNECT_ISSUER_ID: 5cb3a482-8441-442e-a748-62ef51dc132d
         BUNDLE_ID: "com.ymnknet.privatecloud"
         TEAM_ID: "MU4CY2V7WU"
-      xcode: 16.2
+      xcode: latest
     scripts:
-      - name: Set up keychain and signing certificates
+      - name: Delete stale profiles and certs
         script: |
-          keychain initialize
-
           # --- Generate JWT for ASC API ---
           echo "$APP_STORE_CONNECT_PRIVATE_KEY" | tr -d '\r' > /tmp/asc_key.p8
           if grep -q '\\n' /tmp/asc_key.p8; then
@@ -48,132 +46,77 @@ workflows:
           JWT="${SIGN_INPUT}.${RAW_SIG}"
           rm -f /tmp/asc_key.p8
 
-          # --- Delete ALL development certificates (both types) ---
+          # --- Delete stale development certificates ---
           for CERT_TYPE in DEVELOPMENT IOS_DEVELOPMENT; do
-            echo "=== Listing $CERT_TYPE certificates ==="
+            echo "=== Cleaning $CERT_TYPE certificates ==="
             RESP=$(curl -s -H "Authorization: Bearer $JWT" \
               "https://api.appstoreconnect.apple.com/v1/certificates?filter[certificateType]=$CERT_TYPE&limit=200")
-            COUNT=$(echo "$RESP" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('data',[])))" 2>/dev/null || echo "parse-error")
-            echo "Found $COUNT certificates of type $CERT_TYPE"
             IDS=$(echo "$RESP" | python3 -c "import sys,json; [print(c['id']) for c in json.load(sys.stdin).get('data',[])]" 2>/dev/null || true)
             for cid in $IDS; do
-              echo "Revoking $CERT_TYPE cert: $cid"
-              HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+              echo "Deleting cert $cid"
+              curl -s -o /dev/null -w "  HTTP %{http_code}\n" -X DELETE \
                 -H "Authorization: Bearer $JWT" \
-                "https://api.appstoreconnect.apple.com/v1/certificates/$cid")
-              echo "  -> HTTP $HTTP"
+                "https://api.appstoreconnect.apple.com/v1/certificates/$cid" || true
             done
           done
 
-          echo "Waiting for revocation to propagate..."
-          sleep 5
-
-          # --- Fetch Distribution certificate ---
-          echo "=== Fetching IOS_DISTRIBUTION certificate ==="
+          # --- Delete stale provisioning profiles (force recreation with App Groups) ---
+          for PROF_TYPE in IOS_APP_ADHOC IOS_APP_DEVELOPMENT; do
+            echo "=== Cleaning $PROF_TYPE profiles ==="
+            RESP=$(curl -s -H "Authorization: Bearer $JWT" \
+              "https://api.appstoreconnect.apple.com/v1/profiles?filter[profileType]=$PROF_TYPE&limit=200")
+            IDS=$(echo "$RESP" | python3 -c "import sys,json; [print(p['id']) for p in json.load(sys.stdin).get('data',[])]" 2>/dev/null || true)
+            for pid in $IDS; do
+              echo "Deleting profile $pid"
+              curl -s -o /dev/null -w "  HTTP %{http_code}\n" -X DELETE \
+                -H "Authorization: Bearer $JWT" \
+                "https://api.appstoreconnect.apple.com/v1/profiles/$pid" || true
+            done
+          done
+          echo "Cleanup done."
+      - name: Fetch signing files for all targets
+        script: |
+          for bid in \
+            "$BUNDLE_ID" \
+            "$BUNDLE_ID.File-Provider-Extension" \
+            "$BUNDLE_ID.File-Provider-Extension-UI" \
+            "$BUNDLE_ID.Share" \
+            "$BUNDLE_ID.Widget" \
+            "$BUNDLE_ID.WidgetDashboardIntentHandler" \
+            "$BUNDLE_ID.Notification-Service-Extension" \
+            "$BUNDLE_ID.Action-Assistant"; do
+            echo "=== Fetching: $bid ==="
+            app-store-connect fetch-signing-files "$bid" \
+              --platform IOS \
+              --type IOS_APP_ADHOC \
+              --create
+          done
+      - name: Set up keychain and profiles
+        script: |
+          keychain initialize
           app-store-connect certificates list \
             --type IOS_DISTRIBUTION \
             --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
             --save
-
-          # --- Create fresh Development certificate with same key ---
-          echo "=== Creating new DEVELOPMENT certificate ==="
-          app-store-connect certificates create \
-            --type DEVELOPMENT \
-            --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
-            --save || {
-            echo "Create failed (may already exist), trying list..."
-            app-store-connect certificates list \
-              --type DEVELOPMENT \
-              --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
-              --save
-          }
-
-          # --- Import all certificates into keychain ---
           keychain add-certificates
-
-          echo "=== Signing identities in keychain ==="
-          security find-identity -v -p codesigning | head -20
-      - name: Write ASC API key for Xcode
-        script: |
-          mkdir -p ~/private_keys
-          python3 << 'PYEOF'
-          import os, sys
-          key = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '')
-          if '\\n' in key and '\n' not in key.replace('\\n', ''):
-              key = key.replace('\\n', '\n')
-          if not key.strip():
-              print("ERROR: APP_STORE_CONNECT_PRIVATE_KEY is empty", file=sys.stderr)
-              sys.exit(1)
-          key_id = os.environ['APP_STORE_CONNECT_KEY_IDENTIFIER']
-          path = os.path.expanduser(f'~/private_keys/AuthKey_{key_id}.p8')
-          with open(path, 'w') as f:
-              f.write(key)
-              if not key.endswith('\n'):
-                  f.write('\n')
-          print(f"ASC API key written to {path}")
-          PYEOF
+          xcode-project use-profiles
       - name: Trust build plugins
         script: |
           defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES
-      - name: Archive with automatic signing
+      - name: Build IPA
         script: |
-          KEY_PATH=~/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8
           set -o pipefail
-          xcodebuild archive \
-            -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
-            -scheme "$XCODE_SCHEME" \
-            -destination "generic/platform=iOS" \
-            -archivePath "$CM_BUILD_DIR/build/ios/Nextcloud.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$KEY_PATH" \
-            -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
-            CODE_SIGN_STYLE=Automatic \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            2>&1 | tee /tmp/xcodebuild_archive.log || {
+          xcode-project build-ipa \
+            --project "$CM_BUILD_DIR/$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            2>&1 | tee /tmp/xcodebuild_build.log || {
               echo ""
               echo "========================================="
-              echo "ARCHIVE FAILED - key error lines:"
+              echo "BUILD FAILED - key error lines:"
               echo "========================================="
-              grep -iE '(error:|failed to|provision|sign|entitlement|capability|authentication|no profile|revoke)' /tmp/xcodebuild_archive.log | tail -50
-              exit 1
-            }
-      - name: Export ad-hoc IPA
-        script: |
-          KEY_PATH=~/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8
-          cat > /tmp/ExportOptions.plist << 'EXPEOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>ad-hoc</string>
-              <key>signingStyle</key>
-              <string>automatic</string>
-              <key>teamID</key>
-              <string>MU4CY2V7WU</string>
-          </dict>
-          </plist>
-          EXPEOF
-          set -o pipefail
-          xcodebuild -exportArchive \
-            -archivePath "$CM_BUILD_DIR/build/ios/Nextcloud.xcarchive" \
-            -exportPath "$CM_BUILD_DIR/build/ios/ipa" \
-            -exportOptionsPlist /tmp/ExportOptions.plist \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$KEY_PATH" \
-            -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
-            2>&1 | tee /tmp/xcodebuild_export.log || {
-              echo ""
-              echo "========================================="
-              echo "EXPORT FAILED - key error lines:"
-              echo "========================================="
-              grep -iE '(error:|failed to|provision|sign|entitlement|capability)' /tmp/xcodebuild_export.log | tail -30
+              grep -iE '(error:|failed|provision|sign|entitlement)' /tmp/xcodebuild_build.log | tail -30
               exit 1
             }
     artifacts:
       - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_archive.log
-      - /tmp/xcodebuild_export.log
+      - /tmp/xcodebuild_build.log
