@@ -186,13 +186,22 @@ enum MDMCertificate {
 
     private static func generateKeyPair() -> SecKey? {
         deleteKey()
-        let attrs: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeySizeInBits as String: 256,
+        // Persistence attributes (kSecAttrIsPermanent, application tag, accessibility) MUST be
+        // nested inside kSecPrivateKeyAttrs. If placed at the top level, SecKeyCreateRandomKey
+        // returns a usable in-memory key (so CSR signing succeeds) but never stores the private
+        // key in the keychain. The identity then forms against the public key that iOS extracts
+        // from the imported certificate, so SecIdentityCopyPrivateKey hands back a sign-incapable
+        // public key and the TLS CertificateVerify fails (CloudFlare fatal alert -9858).
+        let privateKeyAttrs: [String: Any] = [
             kSecAttrIsPermanent as String: true,
             kSecAttrApplicationTag as String: keyTag.data(using: .utf8)!,
             kSecAttrLabel as String: certLabel,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        let attrs: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String: 256,
+            kSecPrivateKeyAttrs as String: privateKeyAttrs
         ]
         var error: Unmanaged<CFError>?
         guard let key = SecKeyCreateRandomKey(attrs as CFDictionary, &error) else {
