@@ -214,6 +214,12 @@ enum MDMCertificate {
             return false
         }
 
+        let delQuery: [String: Any] = [
+            kSecClass as String: kSecClassCertificate,
+            kSecAttrLabel as String: certLabel
+        ]
+        SecItemDelete(delQuery as CFDictionary)
+
         let addQuery: [String: Any] = [
             kSecClass as String: kSecClassCertificate,
             kSecValueRef as String: cert,
@@ -221,7 +227,7 @@ enum MDMCertificate {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
         let status = SecItemAdd(addQuery as CFDictionary, nil)
-        guard status == errSecSuccess || status == errSecDuplicateItem else {
+        guard status == errSecSuccess else {
             NSLog("[SCEP] SecItemAdd cert: \(status)")
             return false
         }
