@@ -92,6 +92,82 @@ enum MDMCertificate {
         let identityFound = findIdentityInKeychain() != nil
         reportDiag("import_ok_identity_\(identityFound)")
         NSLog("[SCEP] enrollment success, identity=\(identityFound)")
+        if identityFound {
+            dumpCertDiag()
+            DispatchQueue.global().async { directTLSTest() }
+        }
+    }
+
+    private static func dumpCertDiag() {
+        guard let identity = findIdentityInKeychain() else {
+            reportDiag("certdiag_no_identity")
+            return
+        }
+
+        var certRef: SecCertificate?
+        guard SecIdentityCopyCertificate(identity, &certRef) == errSecSuccess,
+              let cert = certRef else {
+            reportDiag("certdiag_copy_cert_failed")
+            return
+        }
+
+        let summary = SecCertificateCopySubjectSummary(cert) as String? ?? "nil"
+        reportDiag("certdiag_subject_\(summary)")
+
+        let certData = SecCertificateCopyData(cert) as Data
+        reportDiag("certdiag_der_b64_\(certData.base64EncodedString())")
+
+        var keyRef: SecKey?
+        guard SecIdentityCopyPrivateKey(identity, &keyRef) == errSecSuccess,
+              let privateKey = keyRef else {
+            reportDiag("certdiag_copy_key_failed")
+            return
+        }
+
+        let testData = "CertificateVerify_test".data(using: .utf8)!
+        var sigError: Unmanaged<CFError>?
+        if let sig = SecKeyCreateSignature(privateKey, .ecdsaSignatureMessageX962SHA256, testData as CFData, &sigError) {
+            let sigLen = (sig as Data).count
+            if let pubKey = SecKeyCopyPublicKey(privateKey) {
+                let ok = SecKeyVerifySignature(pubKey, .ecdsaSignatureMessageX962SHA256, testData as CFData, sig, nil)
+                reportDiag("certdiag_sign_ok_\(sigLen)_verify_\(ok)")
+            } else {
+                reportDiag("certdiag_sign_ok_\(sigLen)_no_pubkey")
+            }
+        } else {
+            reportDiag("certdiag_sign_failed_\(sigError!.takeRetainedValue())")
+        }
+    }
+
+    private static func directTLSTest() {
+        guard let identity = findIdentityInKeychain() else {
+            reportDiag("direct_test_no_identity")
+            return
+        }
+        let cred = URLCredential(identity: identity, certificates: nil, persistence: .forSession)
+        let delegate = DirectTLSDelegate(credential: cred, diagFn: reportDiag)
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        guard let url = URL(string: "https://sv1-cloud.ymnk-private-connect.com/status.php") else { return }
+        let sem = DispatchSemaphore(value: 0)
+        session.dataTask(with: url) { data, response, error in
+            defer { sem.signal() }
+            if let error = error {
+                let nsErr = error as NSError
+                reportDiag("direct_test_error_\(nsErr.code)_\(nsErr.domain)")
+                if let under = nsErr.userInfo[NSUnderlyingErrorKey] as? NSError {
+                    reportDiag("direct_test_under_\(under.code)_\(under.domain)")
+                    if let ssl = under.userInfo["_kCFStreamErrorCodeKey"] as? Int {
+                        reportDiag("direct_test_ssl_\(ssl)")
+                    }
+                }
+                return
+            }
+            let http = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let len = data?.count ?? 0
+            reportDiag("direct_test_ok_http_\(http)_len_\(len)")
+        }.resume()
+        session.finishTasksAndInvalidate()
+        sem.wait(timeout: .now() + 15)
     }
 
     static func reportDiagPublic(_ step: String) { reportDiag(step) }
@@ -309,6 +385,28 @@ enum MDMCertificate {
 
     private static func derContext0(_ content: Data) -> Data {
         return derTag(0xA0, content)
+    }
+}
+
+private class DirectTLSDelegate: NSObject, URLSessionDelegate {
+    let credential: URLCredential
+    let diagFn: (String) -> Void
+    init(credential: URLCredential, diagFn: @escaping (String) -> Void) {
+        self.credential = credential
+        self.diagFn = diagFn
+    }
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        let method = challenge.protectionSpace.authenticationMethod
+        diagFn("direct_challenge_\(method)")
+        if method == NSURLAuthenticationMethodClientCertificate {
+            completionHandler(.useCredential, credential)
+        } else if method == NSURLAuthenticationMethodServerTrust,
+                  let trust = challenge.protectionSpace.serverTrust {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
     }
 }
 
