@@ -103,6 +103,18 @@ workflows:
       - name: Trust build plugins
         script: |
           defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES
+      - name: Set build number (auto-increment for silent MDM updates)
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          if [ -z "$BUILD_NUMBER" ]; then echo "BUILD_NUMBER not set"; exit 1; fi
+          # CFBundleVersion = $(CURRENT_PROJECT_VERSION); bump it to the Codemagic build
+          # number so each build is strictly higher than the installed one. That lets MDM
+          # InstallApplication update the managed app silently in the background (no popup,
+          # no RemoveApplication needed).
+          perl -i -pe "s/CURRENT_PROJECT_VERSION = [0-9.]+;/CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};/g" "$XCODE_PROJECT/project.pbxproj"
+          echo "CURRENT_PROJECT_VERSION -> ${BUILD_NUMBER}"
+          grep -m 5 "CURRENT_PROJECT_VERSION" "$XCODE_PROJECT/project.pbxproj"
       - name: Build IPA
         script: |
           set -o pipefail
