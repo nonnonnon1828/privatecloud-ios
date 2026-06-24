@@ -117,6 +117,15 @@ extension NCCollectionViewCommon: UICollectionViewDelegate {
                 if let vc = await NCViewer().getViewerController(metadata: metadata, image: image, delegate: self) {
                     self.navigationController?.pushViewController(vc, animated: true)
                 }
+            } else if NCShortcut.isShortcut(metadata.fileNameView), NextcloudKit.shared.isNetworkReachable() {
+                // Windows shortcut not cached yet: download it; the transfer delegate then opens it.
+                guard let metadata = await database.setMetadataSessionInWaitDownloadAsync(ocId: metadata.ocId,
+                                                                                          session: self.networking.sessionDownload,
+                                                                                          selector: global.selectorLoadFileView,
+                                                                                          sceneIdentifier: self.controller?.sceneIdentifier) else {
+                    return
+                }
+                await downloadFile()
             } else if NextcloudKit.shared.isNetworkReachable() {
                 guard let  metadata = await database.setMetadataSessionInWaitDownloadAsync(ocId: metadata.ocId,
                                                                                            session: self.networking.sessionDownload,
