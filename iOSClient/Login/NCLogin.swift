@@ -42,11 +42,14 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
     var configAppPassword: String?
 
     private var QRCodeCheck: Bool = false
-    private var didAutoLogin: Bool = false
     private var activeLoginProvider: NCLoginProvider?
 
     // LucidBanner
     var banner: LucidBanner?
+
+    // PrivateCloud minimal login UI
+    private var statusLabel: UILabel?
+    private var primaryLoginButton: UIButton?
 
     // MARK: - View Life Cycle
 
@@ -180,6 +183,7 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
             }
         }
 
+        setupPrivateCloudUI()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -210,11 +214,9 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
             }
         }
 
-        if !didAutoLogin,
-           NCBrandOptions.shared.enforce_servers.count == 1,
+        if NCBrandOptions.shared.enforce_servers.count == 1,
            NCManageDatabase.shared.getAllTableAccount().isEmpty {
-            didAutoLogin = true
-            login()
+            runMTLSPrecheck()
         }
     }
 
@@ -301,6 +303,9 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
     }
 
     @IBAction func actionButtonLogin(_ sender: Any) {
+        primaryLoginButton?.isEnabled = false
+        primaryLoginButton?.alpha = 0.6
+        primaryLoginButton?.setTitle(NSLocalizedString("_pc_opening_", value: "接続中…", comment: ""), for: .normal)
         login()
     }
 
@@ -328,6 +333,113 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
             let popup = NCPopupViewController(contentController: vc, popupWidth: 300, popupHeight: height + 20)
 
             self.present(popup, animated: true)
+        }
+    }
+
+    // MARK: - PrivateCloud minimal UI
+
+    private func setupPrivateCloudUI() {
+        // Hide the stock Nextcloud login chrome
+        imageBrand.isHidden = true
+        baseUrlTextField.isHidden = true
+        loginAddressDetail.isHidden = true
+        loginButton.isHidden = true
+        qrCode.isHidden = true
+        certificate.isHidden = true
+        enforceServersButton.isHidden = true
+        enforceServersDropdownImage.isHidden = true
+
+        view.backgroundColor = .systemBackground
+        navigationController?.view.backgroundColor = .systemBackground
+        navigationController?.navigationBar.tintColor = .label
+
+        let logoView = UIImageView(image: UIImage(named: "logo"))
+        logoView.contentMode = .scaleAspectFit
+        logoView.heightAnchor.constraint(equalToConstant: 96).isActive = true
+        logoView.widthAnchor.constraint(equalToConstant: 96).isActive = true
+
+        let titleLabel = UILabel()
+        titleLabel.text = "やまなかネット PrivateCloud"
+        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        titleLabel.textColor = .label
+        titleLabel.textAlignment = .center
+        titleLabel.numberOfLines = 2
+        titleLabel.adjustsFontSizeToFitWidth = true
+        titleLabel.minimumScaleFactor = 0.7
+
+        let status = UILabel()
+        status.text = NSLocalizedString("_pc_checking_connection_", value: "接続を確認中…", comment: "")
+        status.font = .systemFont(ofSize: 14)
+        status.textColor = .secondaryLabel
+        status.textAlignment = .center
+        status.numberOfLines = 0
+        self.statusLabel = status
+
+        let button = UIButton(type: .system)
+        button.setTitle(NSLocalizedString("_pc_login_", value: "ログイン", comment: ""), for: .normal)
+        button.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+        button.setTitleColor(.white, for: .normal)
+        button.backgroundColor = NCBrandColor.shared.customer
+        button.layer.cornerRadius = 10
+        button.isEnabled = false
+        button.alpha = 0.4
+        button.addTarget(self, action: #selector(actionButtonLogin(_:)), for: .touchUpInside)
+        button.heightAnchor.constraint(equalToConstant: 50).isActive = true
+        self.primaryLoginButton = button
+
+        let hint = UILabel()
+        hint.text = NSLocalizedString("_pc_opens_in_browser_", value: "外部ブラウザで開きます", comment: "")
+        hint.font = .systemFont(ofSize: 12)
+        hint.textColor = .tertiaryLabel
+        hint.textAlignment = .center
+
+        let stack = UIStackView(arrangedSubviews: [logoView, titleLabel, status, button, hint])
+        stack.axis = .vertical
+        stack.alignment = .center
+        stack.spacing = 14
+        stack.setCustomSpacing(10, after: logoView)
+        stack.setCustomSpacing(30, after: titleLabel)
+        stack.setCustomSpacing(8, after: button)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
+            stack.widthAnchor.constraint(equalToConstant: 280),
+            button.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            titleLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            status.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            hint.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        ])
+    }
+
+    private func runMTLSPrecheck() {
+        guard let url = baseUrlTextField.text?.trimmingCharacters(in: .whitespacesAndNewlines), !url.isEmpty else { return }
+        statusLabel?.text = NSLocalizedString("_pc_checking_connection_", value: "接続を確認中…", comment: "")
+        statusLabel?.textColor = .secondaryLabel
+        primaryLoginButton?.isEnabled = false
+        primaryLoginButton?.alpha = 0.4
+
+        NextcloudKit.shared.getServerStatus(serverUrl: url) { [weak self] _, serverInfoResult in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch serverInfoResult {
+                case .success:
+                    if let host = URL(string: url)?.host {
+                        NCNetworking.shared.writeCertificate(host: host)
+                    }
+                    self.statusLabel?.text = NSLocalizedString("_pc_connection_ok_", value: "✓ 接続を確認しました", comment: "")
+                    self.statusLabel?.textColor = .systemGreen
+                    self.primaryLoginButton?.isEnabled = true
+                    self.primaryLoginButton?.alpha = 1.0
+                case .failure(let error):
+                    self.statusLabel?.text = String(format: NSLocalizedString("_pc_connection_failed_", value: "接続を確認できません\n%@", comment: ""), error.errorDescription)
+                    self.statusLabel?.textColor = .systemRed
+                    self.primaryLoginButton?.isEnabled = false
+                    self.primaryLoginButton?.alpha = 0.4
+                }
+            }
         }
     }
 
@@ -502,5 +614,8 @@ extension NCLogin: NCLoginProviderDelegate {
         loginButton.hideSpinnerAndShowButton()
         activeLoginProvider?.cancel()
         activeLoginProvider = nil
+        primaryLoginButton?.isEnabled = true
+        primaryLoginButton?.alpha = 1.0
+        primaryLoginButton?.setTitle(NSLocalizedString("_pc_login_", value: "ログイン", comment: ""), for: .normal)
     }
 }
