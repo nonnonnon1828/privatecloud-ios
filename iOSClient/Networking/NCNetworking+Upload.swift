@@ -345,6 +345,12 @@ extension NCNetworking {
                 }
             }
 #endif
+        } else if error.errorCode == self.global.errorPreconditionFailed {
+            // 412 Precondition Failed: the file already exists on the server. Auto-upload
+            // sends "If-None-Match: *" so an already-present item is rejected with 412.
+            // This is the de-duplication mechanism, not a real failure — the item is
+            // already backed up. Remove the transfer silently without surfacing a UI error.
+            await uploadCancelFile(metadata: metadata)
         } else {
            await NCManageDatabase.shared.setMetadataSessionAsync(ocId: metadata.ocId,
                                                                  sessionTaskIdentifier: 0,
