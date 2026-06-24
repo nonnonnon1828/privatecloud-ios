@@ -113,6 +113,15 @@ extension NCCollectionViewCommon: UICollectionViewDelegate {
                 if let vc = await NCViewer().getViewerController(metadata: metadata, ocIds: withOcIds ? ocIds : nil, image: image, delegate: self) {
                     self.navigationController?.pushViewController(vc, animated: true)
                 }
+            } else if NCViewerText.canHandle(metadata.fileNameView), !utilityFileSystem.fileProviderStorageExists(metadata), NextcloudKit.shared.isNetworkReachable() {
+                // Text/code/Markdown/SVG not cached: download first; the transfer delegate then opens it.
+                guard let metadata = await database.setMetadataSessionInWaitDownloadAsync(ocId: metadata.ocId,
+                                                                                          session: self.networking.sessionDownload,
+                                                                                          selector: global.selectorLoadFileView,
+                                                                                          sceneIdentifier: self.controller?.sceneIdentifier) else {
+                    return
+                }
+                await downloadFile()
             } else if !metadata.isDirectoryE2EE, metadata.isAvailableEditorView || utilityFileSystem.fileProviderStorageExists(metadata) || metadata.name == self.global.talkName {
                 if let vc = await NCViewer().getViewerController(metadata: metadata, image: image, delegate: self) {
                     self.navigationController?.pushViewController(vc, animated: true)

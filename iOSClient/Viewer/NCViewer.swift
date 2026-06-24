@@ -6,6 +6,7 @@ import UIKit
 import NextcloudKit
 import QuickLook
 import SafariServices
+import WebKit
 
 // MARK: - Windows shortcut (.url / .lnk) resolution
 
@@ -142,6 +143,13 @@ class NCViewer: NSObject {
                 }
             }
             // Couldn't resolve → fall through to QuickLook so the raw file is still viewable.
+        }
+
+        // Text / code / Markdown / SVG → native viewer-editor
+        if NCViewerText.canHandle(metadata.fileNameView) {
+            let viewerText = NCViewerText()
+            viewerText.metadata = metadata
+            return viewerText
         }
 
         // URL
@@ -327,5 +335,233 @@ class NCViewer: NSObject {
                 }
             }
         }
+    }
+}
+
+// MARK: - Native text / code / Markdown / SVG viewer-editor (provisional)
+
+final class NCViewerText: UIViewController, UITextViewDelegate {
+
+    var metadata: tableMetadata!
+
+    private let utilityFileSystem = NCUtilityFileSystem()
+    private let textView = UITextView()
+    private var webView: WKWebView?
+    private var isPreviewing = false
+
+    private static let textExtensions: Set<String> = [
+        "md", "markdown", "txt", "text", "log", "json", "yaml", "yml", "xml", "html", "htm",
+        "css", "js", "mjs", "ts", "tsx", "jsx", "vue", "swift", "py", "sh", "bash", "zsh", "rb",
+        "go", "rs", "c", "h", "cpp", "hpp", "cc", "java", "kt", "kts", "php", "pl", "sql", "toml",
+        "ini", "cfg", "conf", "env", "csv", "tsv", "plist", "gradle", "properties", "r", "lua",
+        "dart", "scala", "groovy", "svg"
+    ]
+
+    static func canHandle(_ fileName: String) -> Bool {
+        textExtensions.contains((fileName as NSString).pathExtension.lowercased())
+    }
+
+    private var fileExtension: String { (metadata.fileNameView as NSString).pathExtension.lowercased() }
+    private var canRender: Bool { ["md", "markdown", "html", "htm", "svg"].contains(fileExtension) }
+    private var localPath: String {
+        utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId,
+                                                          fileName: metadata.fileNameView,
+                                                          userId: metadata.userId,
+                                                          urlBase: metadata.urlBase)
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        navigationItem.setBidiSafeTitle(metadata.fileNameView)
+
+        textView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+        textView.autocapitalizationType = .none
+        textView.autocorrectionType = .no
+        textView.smartQuotesType = .no
+        textView.smartDashesType = .no
+        textView.spellCheckingType = .no
+        textView.delegate = self
+        textView.text = (try? String(contentsOfFile: localPath, encoding: .utf8))
+            ?? (try? String(contentsOfFile: localPath, encoding: .isoLatin1)) ?? ""
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(textView)
+        NSLayoutConstraint.activate([
+            textView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            textView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            textView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            textView.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
+        ])
+
+        if canRender {
+            isPreviewing = true
+            showPreview()
+        }
+        updateNavigationItems()
+    }
+
+    private func updateNavigationItems() {
+        var items: [UIBarButtonItem] = [
+            UIBarButtonItem(barButtonSystemItem: .save, target: self, action: #selector(saveTapped))
+        ]
+        if canRender {
+            let title = isPreviewing ? NSLocalizedString("_edit_", value: "編集", comment: "")
+                                     : NSLocalizedString("_preview_", value: "プレビュー", comment: "")
+            items.append(UIBarButtonItem(title: title, style: .plain, target: self, action: #selector(togglePreview)))
+        }
+        navigationItem.rightBarButtonItems = items
+    }
+
+    @objc private func togglePreview() {
+        isPreviewing.toggle()
+        if isPreviewing {
+            showPreview()
+        } else {
+            webView?.isHidden = true
+            textView.isHidden = false
+        }
+        updateNavigationItems()
+    }
+
+    private func showPreview() {
+        let web = webView ?? makeWebView()
+        webView = web
+        textView.isHidden = true
+        web.isHidden = false
+        switch fileExtension {
+        case "svg":
+            if let data = FileManager.default.contents(atPath: localPath) {
+                web.load(data, mimeType: "image/svg+xml", characterEncodingName: "utf-8",
+                         baseURL: URL(fileURLWithPath: localPath).deletingLastPathComponent())
+            }
+        case "html", "htm":
+            web.loadHTMLString(textView.text, baseURL: nil)
+        default:
+            web.loadHTMLString(Self.markdownToHTMLDocument(textView.text), baseURL: nil)
+        }
+    }
+
+    private func makeWebView() -> WKWebView {
+        let web = WKWebView()
+        web.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(web)
+        NSLayoutConstraint.activate([
+            web.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            web.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            web.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            web.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)
+        ])
+        return web
+    }
+
+    func textViewDidChange(_ textView: UITextView) { }
+
+    @objc private func saveTapped() {
+        view.endEditing(true)
+        Task { @MainActor in await self.save() }
+    }
+
+    private func save() async {
+        do {
+            try textView.text.write(toFile: localPath, atomically: true, encoding: .utf8)
+        } catch {
+            return presentError(error.localizedDescription)
+        }
+        let results = await NextcloudKit.shared.uploadAsync(
+            serverUrlFileName: metadata.serverUrlFileName,
+            fileNameLocalPath: localPath,
+            autoMkcol: true,
+            account: metadata.account) { _ in } progressHandler: { _ in }
+
+        if results.error == .success {
+            let serverUrl = metadata.serverUrl
+            await NCNetworking.shared.transferDispatcher.notifyAllDelegatesAsync { delegate in
+                delegate.transferReloadDataSource(serverUrl: serverUrl, requestData: false, status: nil)
+            }
+            if isPreviewing { showPreview() }
+        } else {
+            presentError(results.error.errorDescription)
+        }
+    }
+
+    private func presentError(_ message: String) {
+        let alert = UIAlertController(title: NSLocalizedString("_error_", comment: ""), message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: NSLocalizedString("_ok_", comment: ""), style: .default))
+        present(alert, animated: true)
+    }
+
+    // MARK: - Minimal Markdown → HTML (provisional)
+
+    static func markdownToHTMLDocument(_ markdown: String) -> String {
+        var body = ""
+        var inCodeBlock = false
+        var inList = false
+        func closeList() { if inList { body += "</ul>\n"; inList = false } }
+
+        for rawLine in markdown.components(separatedBy: .newlines) {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                if inCodeBlock { body += "</code></pre>\n" } else { closeList(); body += "<pre><code>" }
+                inCodeBlock.toggle()
+                continue
+            }
+            if inCodeBlock { body += escapeHTML(rawLine) + "\n"; continue }
+            if let level = headingLevel(trimmed) {
+                closeList()
+                body += "<h\(level)>\(inlineMarkdown(String(trimmed.dropFirst(level + 1))))</h\(level)>\n"
+                continue
+            }
+            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+                if !inList { body += "<ul>\n"; inList = true }
+                body += "<li>\(inlineMarkdown(String(trimmed.dropFirst(2))))</li>\n"
+                continue
+            }
+            closeList()
+            if trimmed.isEmpty { continue }
+            if trimmed.hasPrefix("> ") {
+                body += "<blockquote>\(inlineMarkdown(String(trimmed.dropFirst(2))))</blockquote>\n"
+            } else {
+                body += "<p>\(inlineMarkdown(rawLine))</p>\n"
+            }
+        }
+        closeList()
+        if inCodeBlock { body += "</code></pre>\n" }
+
+        let css = "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            + "<style>body{font:-apple-system-body;-webkit-text-size-adjust:100%;margin:16px;line-height:1.6;color:#1c1c1e;background:#fff;}"
+            + "@media(prefers-color-scheme:dark){body{color:#e5e5ea;background:#000;}pre,code{background:#1c1c1e;}}"
+            + "h1,h2,h3,h4{line-height:1.25;}pre{background:#f2f2f7;padding:12px;border-radius:8px;overflow:auto;}"
+            + "code{font-family:ui-monospace,Menlo,monospace;background:#f2f2f7;padding:2px 4px;border-radius:4px;}"
+            + "pre code{background:none;padding:0;}blockquote{border-left:3px solid #c7c7cc;margin:0;padding-left:12px;color:#6c6c70;}"
+            + "a{color:#007aff;}img{max-width:100%;}</style>"
+        return "<!doctype html><html><head>\(css)</head><body>\(body)</body></html>"
+    }
+
+    private static func headingLevel(_ line: String) -> Int? {
+        var count = 0
+        for ch in line { if ch == "#" { count += 1 } else { break } }
+        let chars = Array(line)
+        if count >= 1, count <= 6, chars.count > count, chars[count] == " " { return count }
+        return nil
+    }
+
+    private static func inlineMarkdown(_ string: String) -> String {
+        var text = escapeHTML(string)
+        text = regexReplace(text, #"\*\*(.+?)\*\*"#, "<strong>$1</strong>")
+        text = regexReplace(text, #"\*(.+?)\*"#, "<em>$1</em>")
+        text = regexReplace(text, "`(.+?)`", "<code>$1</code>")
+        text = regexReplace(text, #"\[(.+?)\]\((.+?)\)"#, "<a href=\"$2\">$1</a>")
+        return text
+    }
+
+    private static func escapeHTML(_ string: String) -> String {
+        string.replacingOccurrences(of: "&", with: "&amp;")
+              .replacingOccurrences(of: "<", with: "&lt;")
+              .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    private static func regexReplace(_ string: String, _ pattern: String, _ template: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return string }
+        return regex.stringByReplacingMatches(in: string, range: NSRange(string.startIndex..., in: string), withTemplate: template)
     }
 }
