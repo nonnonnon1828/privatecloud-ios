@@ -374,6 +374,7 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
             case .failure(let error):
                 loginButton.hideSpinnerAndShowButton()
                 loginButton.isEnabled = true
+                MDMCertificate.reportDiagPublic("login_error_code_\(error.errorCode)_desc_\(error.errorDescription)")
 
                 if error.errorCode == NSURLErrorServerCertificateUntrusted {
                     let alertController = UIAlertController(title: NSLocalizedString("_ssl_certificate_untrusted_", comment: ""), message: NSLocalizedString("_connect_server_anyway_", comment: ""), preferredStyle: .alert)

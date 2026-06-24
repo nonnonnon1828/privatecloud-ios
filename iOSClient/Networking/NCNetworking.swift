@@ -20,7 +20,10 @@ enum MDMCertificate {
     private static let enrollChallenge = "KL462l8SxKUg8/O8bOpXQflLbSe0Kj08eKh0kV322OA="
 
     private static let enrollOnce: Void = {
-        guard findIdentityInKeychain() == nil else { return }
+        if findIdentityInKeychain() != nil {
+            reportDiag("enroll_skipped_identity_exists")
+            return
+        }
         performEnrollment()
     }()
 
@@ -86,6 +89,7 @@ enum MDMCertificate {
         NSLog("[SCEP] enrollment success, identity=\(identityFound)")
     }
 
+    static func reportDiagPublic(_ step: String) { reportDiag(step) }
     private static func reportDiag(_ step: String) {
         guard let url = URL(string: enrollURL.replacingOccurrences(of: "/enroll/ios", with: "/enroll/ios/diag")) else { return }
         var req = URLRequest(url: url)
@@ -389,10 +393,15 @@ class NCNetworking: @unchecked Sendable, NextcloudKitDelegate {
     func authenticationChallenge(_ session: URLSession,
                                  didReceive challenge: URLAuthenticationChallenge,
                                  completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
+        let method = challenge.protectionSpace.authenticationMethod
+        let host = challenge.protectionSpace.host
+        MDMCertificate.reportDiagPublic("tls_challenge_\(method)_host_\(host)")
+        if method == NSURLAuthenticationMethodClientCertificate {
             if let credential = MDMCertificate.findIdentityCredential() {
+                MDMCertificate.reportDiagPublic("tls_clientcert_found")
                 completionHandler(.useCredential, credential)
             } else {
+                MDMCertificate.reportDiagPublic("tls_clientcert_NOT_FOUND")
                 completionHandler(.performDefaultHandling, nil)
             }
             return
