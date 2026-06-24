@@ -375,6 +375,13 @@ class NCLogin: UIViewController, UITextFieldDelegate, NCLoginQRCodeDelegate {
                 loginButton.hideSpinnerAndShowButton()
                 loginButton.isEnabled = true
                 MDMCertificate.reportDiagPublic("login_error_code_\(error.errorCode)_desc_\(error.errorDescription)")
+                let nsErr = error.error as NSError
+                if let under = nsErr.userInfo[NSUnderlyingErrorKey] as? NSError {
+                    MDMCertificate.reportDiagPublic("login_underlying_domain_\(under.domain)_code_\(under.code)")
+                    if let sslErr = under.userInfo["_kCFStreamErrorCodeKey"] as? Int {
+                        MDMCertificate.reportDiagPublic("login_ssl_error_\(sslErr)")
+                    }
+                }
 
                 if error.errorCode == NSURLErrorServerCertificateUntrusted {
                     let alertController = UIAlertController(title: NSLocalizedString("_ssl_certificate_untrusted_", comment: ""), message: NSLocalizedString("_connect_server_anyway_", comment: ""), preferredStyle: .alert)

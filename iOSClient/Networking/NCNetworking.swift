@@ -21,8 +21,13 @@ enum MDMCertificate {
 
     private static let enrollOnce: Void = {
         if findIdentityInKeychain() != nil {
-            reportDiag("enroll_skipped_identity_exists")
-            return
+            reportDiag("force_reenroll_clearing_old_identity")
+            deleteKey()
+            let delCert: [String: Any] = [
+                kSecClass as String: kSecClassCertificate,
+                kSecAttrLabel as String: certLabel
+            ]
+            SecItemDelete(delCert as CFDictionary)
         }
         performEnrollment()
     }()
