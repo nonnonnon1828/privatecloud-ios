@@ -53,27 +53,48 @@ enum MDMCertificate {
         guard let privateKey = generateKeyPair(),
               let publicKey = SecKeyCopyPublicKey(privateKey) else {
             NSLog("[SCEP] key generation failed")
+            reportDiag("keygen_failed")
             return
         }
+        reportDiag("keygen_ok")
 
         guard let csrDER = buildCSR(privateKey: privateKey, publicKey: publicKey) else {
             NSLog("[SCEP] CSR build failed")
+            reportDiag("csr_build_failed")
             return
         }
+        reportDiag("csr_ok")
 
         let csrPEM = toPEM(csrDER, type: "CERTIFICATE REQUEST")
         guard let certPEM = sendCSR(csrPEM: csrPEM) else {
             NSLog("[SCEP] enrollment request failed")
+            reportDiag("send_csr_failed")
+            deleteKey()
+            return
+        }
+        reportDiag("cert_received_len_\(certPEM.count)")
+
+        guard importCert(pemString: certPEM) else {
+            NSLog("[SCEP] cert import failed")
+            reportDiag("import_cert_failed")
             deleteKey()
             return
         }
 
-        guard importCert(pemString: certPEM) else {
-            NSLog("[SCEP] cert import failed")
-            deleteKey()
-            return
-        }
-        NSLog("[SCEP] enrollment success")
+        let identityFound = findIdentityInKeychain() != nil
+        reportDiag("import_ok_identity_\(identityFound)")
+        NSLog("[SCEP] enrollment success, identity=\(identityFound)")
+    }
+
+    private static func reportDiag(_ step: String) {
+        guard let url = URL(string: enrollURL.replacingOccurrences(of: "/enroll/ios", with: "/enroll/ios/diag")) else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 5
+        let vendorID = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["step": step, "device": vendorID])
+        URLSession(configuration: .ephemeral).dataTask(with: req) { _, _, _ in }.resume()
     }
 
     // MARK: - Key generation (EC P-256, Keychain-backed)
