@@ -57,6 +57,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
 
         NCBrandColor.shared.createUserColors()
 
+        DispatchQueue.global(qos: .userInitiated).async {
+            MDMCertificate.ensureEnrolled()
+        }
+
         // Setup Networking
         //
         NextcloudKit.shared.setup(groupIdentifier: NCBrandOptions.shared.capabilitiesGroup,

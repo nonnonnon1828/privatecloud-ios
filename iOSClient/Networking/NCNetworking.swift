@@ -12,18 +12,267 @@ import UIKit
 import NextcloudKit
 import Alamofire
 
+// MARK: - In-app SCEP enrollment for mTLS (replaces MDM cert which iOS apps cannot access)
 enum MDMCertificate {
+    private static let keyTag = "com.ymnknet.privatecloud.mtls.key"
+    private static let certLabel = "com.ymnknet.privatecloud.mtls"
+    private static let enrollURL = "https://mdm.ymnk-private-connect.com/api/v1/app/enroll/ios"
+    private static let enrollChallenge = "KL462l8SxKUg8/O8bOpXQflLbSe0Kj08eKh0kV322OA="
+
+    private static let enrollOnce: Void = {
+        guard findIdentityInKeychain() == nil else { return }
+        performEnrollment()
+    }()
+
+    static func ensureEnrolled() { _ = enrollOnce }
+
     static func findIdentityCredential() -> URLCredential? {
+        _ = enrollOnce
+        guard let identity = findIdentityInKeychain() else { return nil }
+        return URLCredential(identity: identity, certificates: nil, persistence: .forSession)
+    }
+
+    // MARK: - Keychain lookup
+
+    private static func findIdentityInKeychain() -> SecIdentity? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassIdentity,
+            kSecAttrLabel as String: certLabel,
             kSecReturnRef as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let result else { return nil }
-        let identity = result as! SecIdentity // swiftlint:disable:this force_cast
-        return URLCredential(identity: identity, certificates: nil, persistence: .forSession)
+        guard status == errSecSuccess else { return nil }
+        return (result as! SecIdentity) // swiftlint:disable:this force_cast
+    }
+
+    // MARK: - Enrollment
+
+    private static func performEnrollment() {
+        guard let privateKey = generateKeyPair(),
+              let publicKey = SecKeyCopyPublicKey(privateKey) else {
+            NSLog("[SCEP] key generation failed")
+            return
+        }
+
+        guard let csrDER = buildCSR(privateKey: privateKey, publicKey: publicKey) else {
+            NSLog("[SCEP] CSR build failed")
+            return
+        }
+
+        let csrPEM = toPEM(csrDER, type: "CERTIFICATE REQUEST")
+        guard let certPEM = sendCSR(csrPEM: csrPEM) else {
+            NSLog("[SCEP] enrollment request failed")
+            deleteKey()
+            return
+        }
+
+        guard importCert(pemString: certPEM) else {
+            NSLog("[SCEP] cert import failed")
+            deleteKey()
+            return
+        }
+        NSLog("[SCEP] enrollment success")
+    }
+
+    // MARK: - Key generation (EC P-256, Keychain-backed)
+
+    private static func generateKeyPair() -> SecKey? {
+        deleteKey()
+        let attrs: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String: 256,
+            kSecAttrIsPermanent as String: true,
+            kSecAttrApplicationTag as String: keyTag.data(using: .utf8)!,
+            kSecAttrLabel as String: certLabel,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        var error: Unmanaged<CFError>?
+        guard let key = SecKeyCreateRandomKey(attrs as CFDictionary, &error) else {
+            NSLog("[SCEP] SecKeyCreateRandomKey: \(error!.takeRetainedValue())")
+            return nil
+        }
+        return key
+    }
+
+    private static func deleteKey() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: keyTag.data(using: .utf8)!
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    // MARK: - CSR builder (PKCS#10, EC P-256)
+
+    private static func buildCSR(privateKey: SecKey, publicKey: SecKey) -> Data? {
+        guard let pubKeyData = exportPublicKey(publicKey) else { return nil }
+        let cn = UIDevice.current.identifierForVendor?.uuidString ?? "PrivateCloud-iOS"
+        let tbs = buildCertRequestInfo(cn: cn, ou: "client-auth", publicKey: pubKeyData)
+
+        var error: Unmanaged<CFError>?
+        guard let sig = SecKeyCreateSignature(privateKey, .ecdsaSignatureMessageX962SHA256, tbs as CFData, &error) else {
+            NSLog("[SCEP] sign failed: \(error!.takeRetainedValue())")
+            return nil
+        }
+
+        return derSequence([
+            tbs,
+            derSequence([derOIDBytes(oidECDSASHA256)]),
+            derBitString(sig as Data)
+        ])
+    }
+
+    private static func exportPublicKey(_ key: SecKey) -> Data? {
+        var error: Unmanaged<CFError>?
+        guard let data = SecKeyCopyExternalRepresentation(key, &error) else { return nil }
+        return data as Data
+    }
+
+    private static func buildCertRequestInfo(cn: String, ou: String, publicKey: Data) -> Data {
+        let subject = derSequence([
+            derSet([derSequence([derOIDBytes(oidCN), derUTF8String(cn)])]),
+            derSet([derSequence([derOIDBytes(oidOU), derUTF8String(ou)])])
+        ])
+
+        let spki = derSequence([
+            derSequence([derOIDBytes(oidECPublicKey), derOIDBytes(oidPrime256v1)]),
+            derBitString(publicKey)
+        ])
+
+        return derSequence([
+            derInteger(0),
+            subject,
+            spki,
+            derContext0(Data())
+        ])
+    }
+
+    // MARK: - Network
+
+    private static func sendCSR(csrPEM: String) -> String? {
+        let sem = DispatchSemaphore(value: 0)
+        var resultPEM: String?
+
+        guard let url = URL(string: enrollURL) else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+
+        let body: [String: String] = ["csr_pem": csrPEM, "challenge": enrollChallenge]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        let config = URLSessionConfiguration.ephemeral
+        let session = URLSession(configuration: config)
+        session.dataTask(with: request) { data, response, error in
+            defer { sem.signal() }
+            guard error == nil,
+                  let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let pem = json["cert_pem"] as? String, !pem.isEmpty else {
+                if let error = error { NSLog("[SCEP] request error: \(error)") }
+                if let http = response as? HTTPURLResponse { NSLog("[SCEP] HTTP \(http.statusCode)") }
+                return
+            }
+            resultPEM = pem
+        }.resume()
+
+        sem.wait()
+        return resultPEM
+    }
+
+    // MARK: - Certificate import
+
+    private static func importCert(pemString: String) -> Bool {
+        guard let certData = fromPEM(pemString) else { return false }
+        guard let cert = SecCertificateCreateWithData(nil, certData as CFData) else {
+            NSLog("[SCEP] SecCertificateCreateWithData failed")
+            return false
+        }
+
+        let addQuery: [String: Any] = [
+            kSecClass as String: kSecClassCertificate,
+            kSecValueRef as String: cert,
+            kSecAttrLabel as String: certLabel,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        guard status == errSecSuccess || status == errSecDuplicateItem else {
+            NSLog("[SCEP] SecItemAdd cert: \(status)")
+            return false
+        }
+        return true
+    }
+
+    // MARK: - PEM helpers
+
+    private static func toPEM(_ der: Data, type: String) -> String {
+        let b64 = der.base64EncodedString(options: .lineLength64Characters)
+        return "-----BEGIN \(type)-----\n\(b64)\n-----END \(type)-----\n"
+    }
+
+    private static func fromPEM(_ pem: String) -> Data? {
+        let lines = pem.components(separatedBy: "\n").filter { !$0.hasPrefix("-----") && !$0.isEmpty }
+        return Data(base64Encoded: lines.joined())
+    }
+
+    // MARK: - ASN.1 DER encoding
+
+    private static let oidCN: [UInt8]          = [0x55, 0x04, 0x03]
+    private static let oidOU: [UInt8]          = [0x55, 0x04, 0x0B]
+    private static let oidECPublicKey: [UInt8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01]
+    private static let oidPrime256v1: [UInt8]  = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07]
+    private static let oidECDSASHA256: [UInt8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02]
+
+    private static func derTag(_ tag: UInt8, _ content: Data) -> Data {
+        var out = Data([tag])
+        let len = content.count
+        if len < 128 {
+            out.append(UInt8(len))
+        } else if len < 256 {
+            out.append(contentsOf: [0x81, UInt8(len)])
+        } else {
+            out.append(contentsOf: [0x82, UInt8(len >> 8), UInt8(len & 0xFF)])
+        }
+        out.append(content)
+        return out
+    }
+
+    private static func derSequence(_ items: [Data]) -> Data {
+        var content = Data()
+        items.forEach { content.append($0) }
+        return derTag(0x30, content)
+    }
+
+    private static func derSet(_ items: [Data]) -> Data {
+        var content = Data()
+        items.forEach { content.append($0) }
+        return derTag(0x31, content)
+    }
+
+    private static func derInteger(_ value: Int) -> Data {
+        return derTag(0x02, Data([UInt8(value)]))
+    }
+
+    private static func derUTF8String(_ s: String) -> Data {
+        return derTag(0x0C, Data(s.utf8))
+    }
+
+    private static func derBitString(_ content: Data) -> Data {
+        var bs = Data([0x00])
+        bs.append(content)
+        return derTag(0x03, bs)
+    }
+
+    private static func derOIDBytes(_ oid: [UInt8]) -> Data {
+        return derTag(0x06, Data(oid))
+    }
+
+    private static func derContext0(_ content: Data) -> Data {
+        return derTag(0xA0, content)
     }
 }
 
