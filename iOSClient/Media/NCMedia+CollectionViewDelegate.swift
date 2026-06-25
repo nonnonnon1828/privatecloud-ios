@@ -97,7 +97,7 @@ extension NCMedia {
             return
         }
 
-        let playerVC = NCStreamPlayerViewController(asset: asset, loader: loader, title: metadata.fileNameView)
+        let playerVC = NCStreamPlayerViewController(metadata: metadata, asset: asset, loader: loader, title: metadata.fileNameView)
         playerVC.onUnsupported = { [weak self] in
             self?.openInPagedViewer(metadata: metadata)
         }

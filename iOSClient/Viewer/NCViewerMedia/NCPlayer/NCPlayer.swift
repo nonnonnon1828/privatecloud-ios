@@ -538,9 +538,12 @@ extension NCVideoStreamLoader: URLSessionDataDelegate {
 final class NCStreamPlayerViewController: UIViewController {
     private let player = AVPlayer()
     private let playerLayer = AVPlayerLayer()
-    private let playerItem: AVPlayerItem
+    private var playerItem: AVPlayerItem
     private var streamLoader: NCVideoStreamLoader?
     private let videoTitle: String
+    private let metadata: tableMetadata
+    private let utilityFileSystem = NCUtilityFileSystem()
+    private var didAttemptLocalFallback = false
 
     var onUnsupported: (() -> Void)?
 
@@ -565,7 +568,8 @@ final class NCStreamPlayerViewController: UIViewController {
     private var wasPlayingBeforeSpeedUp = false
     private var didFinishFallback = false
 
-    init(asset: AVURLAsset, loader: NCVideoStreamLoader?, title: String) {
+    init(metadata: tableMetadata, asset: AVURLAsset, loader: NCVideoStreamLoader?, title: String) {
+        self.metadata = metadata
         self.playerItem = AVPlayerItem(asset: asset)
         self.streamLoader = loader
         self.videoTitle = title
@@ -802,7 +806,15 @@ final class NCStreamPlayerViewController: UIViewController {
                 durationLabel.text = Self.formatTime(seconds)
             }
         case .failed:
-            fallbackToDownload()
+            // Unified UX: if we were streaming, transparently download and keep playing in THIS same
+            // player (same controls and gestures) instead of switching to a different viewer. Only if
+            // the downloaded file also can't be decoded do we hand off (VLC) as a last resort.
+            if streamLoader != nil, !didAttemptLocalFallback {
+                didAttemptLocalFallback = true
+                downloadAndPlayLocally()
+            } else {
+                fallbackToDownload()
+            }
         default:
             break
         }
@@ -835,6 +847,40 @@ final class NCStreamPlayerViewController: UIViewController {
         didFinishFallback = true
         let handler = onUnsupported
         dismiss(animated: false) { handler?() }
+    }
+
+    /// Streaming failed: download the file through the app's mTLS session and resume playback in the
+    /// same player from the local copy, so the experience is identical to streaming (just with a wait).
+    private func downloadAndPlayLocally() {
+        spinner.startAnimating()
+        Task { @MainActor in
+            guard let downloadMetadata = await NCManageDatabase.shared.setMetadataSessionInWaitDownloadAsync(
+                ocId: metadata.ocId,
+                session: NCNetworking.shared.sessionDownload,
+                selector: "") else {
+                fallbackToDownload()
+                return
+            }
+            let results = await NCNetworking.shared.downloadFile(metadata: downloadMetadata)
+            if results.nkError == .success, utilityFileSystem.fileProviderStorageExists(metadata) {
+                let localPath = utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId, fileName: metadata.fileNameView, userId: metadata.userId, urlBase: metadata.urlBase)
+                swapToItem(AVPlayerItem(url: URL(fileURLWithPath: localPath)))
+            } else {
+                fallbackToDownload()
+            }
+        }
+    }
+
+    private func swapToItem(_ item: AVPlayerItem) {
+        statusObservation?.invalidate()
+        streamLoader?.invalidate()
+        streamLoader = nil
+        playerItem = item
+        player.replaceCurrentItem(with: item)
+        statusObservation = item.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
+            DispatchQueue.main.async { self?.handleStatus(observedItem.status) }
+        }
+        player.play()
     }
 
     // MARK: Actions
