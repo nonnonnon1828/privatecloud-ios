@@ -182,32 +182,11 @@ extension NCCollectionViewCommon: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration? {
-        guard let metadata = self.dataSource.getMetadata(indexPath: indexPath),
-              metadata.classFile != NKTypeClassFile.url.rawValue,
-              !isEditMode
-        else {
-            return nil
-        }
-        let identifier = indexPath as NSCopying
-        var image = utility.getImage(ocId: metadata.ocId, etag: metadata.etag, ext: global.previewExt1024, userId: metadata.userId, urlBase: metadata.urlBase)
-        let cell = collectionView.cellForItem(at: indexPath)
-
-        if image == nil {
-            if cell is NCListCell {
-                image = (cell as? NCListCell)?.imageItem.image
-            } else if cell is NCGridCell {
-                image = (cell as? NCGridCell)?.imageItem.image
-            } else if cell is NCPhotoCell {
-                image = (cell as? NCPhotoCell)?.imageItem.image
-            }
-        }
-
-        return UIContextMenuConfiguration(identifier: identifier, previewProvider: {
-            return nil
-        }, actionProvider: { _ in
-            let contextMenu = NCContextMenuMain(metadata: metadata.detachedCopy(), viewController: self, controller: self.controller, sender: cell)
-            return contextMenu.viewMenu()
-        })
+        // PrivateCloud: long-pressing an item enters selection mode (see longPressCollecationView),
+        // so the single-item long-press menu is disabled here. The same actions stay on the cell's
+        // "⋯" button. Returning nil unconditionally avoids the race where the system menu would
+        // otherwise appear before the (async) setEditMode switch takes effect in this browser.
+        return nil
     }
 
     func collectionView(_ collectionView: UICollectionView, willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionCommitAnimating) {
