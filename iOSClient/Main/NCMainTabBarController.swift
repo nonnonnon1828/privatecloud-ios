@@ -104,16 +104,14 @@ class NCMainTabBarController: UITabBarController {
         tabBar.scrollEdgeAppearance = appearance
     }
 
-    // PrivateCloud: interactive horizontal paging between the main tabs — the screens track the finger.
-    // The two things that make naive paging on a UITabBarController janky are handled: the adjacent
-    // tab's view is moved off-screen BEFORE it is added (so it never flashes at centre when the drag
-    // starts), and on commit the index swap is hidden under a snapshot of the now-centred target (so
-    // the tab controller's own view swap doesn't flash black). A direction lock (see
+    // PrivateCloud: interactive horizontal paging between the main tabs that tracks the finger using
+    // the framework's OWN transition system (a UIPercentDrivenInteractiveTransition driving a custom
+    // slide animator). Because UIKit performs the real from/to view swap, there is none of the black
+    // flash or start-of-drag pop-in that manual view juggling caused. A direction lock (see
     // gestureRecognizerShouldBegin) only starts the pan for clearly horizontal drags so it is never
     // confused with vertical scrolling. Gated to a tab's root (not while selecting, drilled into a
     // detail/viewer, or with something presented). Tapping the tab bar always still works.
-    private var tabPanTargetIndex: Int?
-    private var tabPanTargetView: UIView?
+    private var tabInteraction: UIPercentDrivenInteractiveTransition?
 
     private func setupTabSwipeGestures() {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleTabPan(_:)))
@@ -122,100 +120,32 @@ class NCMainTabBarController: UITabBarController {
     }
 
     @objc private func handleTabPan(_ gesture: UIPanGestureRecognizer) {
-        guard let currentView = selectedViewController?.view else { return }
         let translationX = gesture.translation(in: view).x
         let width = max(view.bounds.width, 1)
 
         switch gesture.state {
         case .changed:
-            if tabPanTargetIndex == nil {
+            if tabInteraction == nil {
                 guard abs(translationX) > 1 else { return }
                 let target = translationX < 0 ? selectedIndex + 1 : selectedIndex - 1
-                guard let count = viewControllers?.count, target >= 0, target < count,
-                      let targetView = viewControllers?[target].view else { return }
-                tabPanTargetIndex = target
-                tabPanTargetView = targetView
-                targetView.frame = currentView.frame
-                targetView.transform = CGAffineTransform(translationX: translationX < 0 ? width : -width, y: 0)
-                view.insertSubview(targetView, belowSubview: tabBar)
+                guard let count = viewControllers?.count, target >= 0, target < count else { return }
+                tabInteraction = UIPercentDrivenInteractiveTransition()
+                selectedIndex = target
             }
-            guard let target = tabPanTargetIndex, let targetView = tabPanTargetView else { return }
-            let forward = target > selectedIndex
-            let clamped = forward ? min(0, translationX) : max(0, translationX)
-            let base = forward ? width : -width
-            currentView.transform = CGAffineTransform(translationX: clamped, y: 0)
-            targetView.transform = CGAffineTransform(translationX: base + clamped, y: 0)
+            tabInteraction?.update(min(0.99, abs(translationX) / width))
         case .ended, .cancelled, .failed:
-            finishTabPan(translationX: translationX, velocityX: gesture.velocity(in: view).x, width: width, currentView: currentView)
+            guard let interaction = tabInteraction else { return }
+            tabInteraction = nil
+            let velocityX = gesture.velocity(in: view).x
+            if abs(translationX) / width > 0.4 || abs(velocityX) > 700 {
+                UISelectionFeedbackGenerator().selectionChanged()
+                interaction.finish()
+            } else {
+                interaction.cancel()
+            }
         default:
             break
         }
-    }
-
-    private func finishTabPan(translationX: CGFloat, velocityX: CGFloat, width: CGFloat, currentView: UIView) {
-        guard let target = tabPanTargetIndex, let targetView = tabPanTargetView else {
-            resetTabPan()
-            return
-        }
-        let forward = target > selectedIndex
-        let base = forward ? width : -width
-        let commit = abs(translationX) / width > 0.3 || abs(velocityX) > 700
-        if commit {
-            UISelectionFeedbackGenerator().selectionChanged()
-            UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut, animations: {
-                currentView.transform = CGAffineTransform(translationX: -base, y: 0)
-                targetView.transform = .identity
-            }, completion: { _ in
-                let cover = targetView.snapshotView(afterScreenUpdates: false)
-                if let cover {
-                    cover.frame = targetView.frame
-                    self.view.insertSubview(cover, belowSubview: self.tabBar)
-                }
-                currentView.transform = .identity
-                targetView.transform = .identity
-                self.selectedIndex = target
-                DispatchQueue.main.async { cover?.removeFromSuperview() }
-                self.resetTabPan()
-            })
-        } else {
-            UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut, animations: {
-                currentView.transform = .identity
-                targetView.transform = CGAffineTransform(translationX: base, y: 0)
-            }, completion: { _ in
-                targetView.removeFromSuperview()
-                self.resetTabPan()
-            })
-        }
-    }
-
-    private func resetTabPan() {
-        tabPanTargetIndex = nil
-        tabPanTargetView = nil
-    }
-
-    private func configureMoreController() {
-        guard var controllers = viewControllers else { return }
-
-        controllers.append(makeMoreNavigationController())
-        viewControllers = controllers
-    }
-
-    private func makeMoreNavigationController() -> UIViewController {
-        let moreView = NCMoreView(account: account, controller: self)
-        let hostingController = UIHostingController(rootView: moreView)
-
-        hostingController.navigationItem.title = NSLocalizedString("_more_", comment: "")
-
-        let navigationController = NCMoreNavigationController(rootViewController: hostingController)
-
-        navigationController.tabBarItem = UITabBarItem(
-            title: NSLocalizedString("_more_", comment: ""),
-            image: UIImage(systemName: "ellipsis.circle.fill"),
-            selectedImage: UIImage(systemName: "ellipsis.circle.fill")
-        )
-        navigationController.tabBarItem.tag = 104
-
-        return navigationController
     }
 
     private func configureTabBarItems() {
@@ -317,6 +247,21 @@ extension NCMainTabBarController: UITabBarControllerDelegate {
         previousIndex = tabBarController.selectedIndex
     }
 
+    func tabBarController(_ tabBarController: UITabBarController, animationControllerForTransitionFrom fromVC: UIViewController, to toVC: UIViewController) -> UIViewControllerAnimatedTransitioning? {
+        // Only slide while an interactive tab pan is in progress; plain tab taps stay instant.
+        guard tabInteraction != nil,
+              let controllers = viewControllers,
+              let fromIndex = controllers.firstIndex(of: fromVC),
+              let toIndex = controllers.firstIndex(of: toVC) else {
+            return nil
+        }
+        return NCTabSlideAnimator(forward: toIndex > fromIndex)
+    }
+
+    func tabBarController(_ tabBarController: UITabBarController, interactionControllerFor animationController: UIViewControllerAnimatedTransitioning) -> UIViewControllerInteractiveTransitioning? {
+        return tabInteraction
+    }
+
     private func scrollToTop(viewController: UIViewController) {
         guard let navigationController = viewController as? UINavigationController,
               let topViewController = navigationController.topViewController else { return }
@@ -362,5 +307,44 @@ extension NCMainTabBarController: UIGestureRecognizerDelegate {
         // Let the tab pan begin alongside a scroll view's pan; the direction lock above keeps them on
         // separate axes (horizontal = tabs, vertical = scrolling), so they don't fight.
         return true
+    }
+}
+
+// PrivateCloud: slides the outgoing tab off one side while the incoming slides in from the other.
+// Driven interactively by the tab pan's UIPercentDrivenInteractiveTransition.
+final class NCTabSlideAnimator: NSObject, UIViewControllerAnimatedTransitioning {
+    private let forward: Bool
+
+    init(forward: Bool) {
+        self.forward = forward
+    }
+
+    func transitionDuration(using transitionContext: UIViewControllerContextTransitioning?) -> TimeInterval {
+        return 0.3
+    }
+
+    func animateTransition(using transitionContext: UIViewControllerContextTransitioning) {
+        let container = transitionContext.containerView
+        guard let fromView = transitionContext.view(forKey: .from),
+              let toView = transitionContext.view(forKey: .to) else {
+            transitionContext.completeTransition(false)
+            return
+        }
+        let width = container.bounds.width
+        toView.frame = container.bounds
+        toView.transform = CGAffineTransform(translationX: forward ? width : -width, y: 0)
+        container.addSubview(toView)
+
+        UIView.animate(withDuration: transitionDuration(using: transitionContext), delay: 0, options: .curveLinear, animations: {
+            toView.transform = .identity
+            fromView.transform = CGAffineTransform(translationX: self.forward ? -width : width, y: 0)
+        }, completion: { _ in
+            // Reset both transforms regardless of finish/cancel: on cancel UIKit removes toView from
+            // the container but leaves the transform on it, which would show that tab off-screen the
+            // next time it is selected.
+            fromView.transform = .identity
+            toView.transform = .identity
+            transitionContext.completeTransition(!transitionContext.transitionWasCancelled)
+        })
     }
 }
