@@ -354,11 +354,19 @@ final class NCVideoStreamLoader: NSObject {
     private let authHeader: String
     private var pendingRequests: [Int: AVAssetResourceLoadingRequest] = [:]
     private var pendingTasks: [Int: URLSessionDataTask] = [:]
+    private var retryByRequest: [ObjectIdentifier: Int] = [:]
+    private let maxRetries = 5
     private let lock = NSLock()
 
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // Ride out flaky mobile connections: wait for connectivity to return instead of failing,
+        // and tolerate slow links. Transient per-range failures are retried (see didCompleteWithError),
+        // so a network blip becomes buffering rather than a fall back to the download player.
+        config.waitsForConnectivity = true
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 600
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
@@ -388,14 +396,23 @@ final class NCVideoStreamLoader: NSObject {
 extension NCVideoStreamLoader: AVAssetResourceLoaderDelegate {
     func resourceLoader(_ resourceLoader: AVAssetResourceLoader,
                         shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest) -> Bool {
+        startRequest(for: loadingRequest)
+        return true
+    }
+
+    /// Issue (or re-issue after a transient failure) the HTTP range request backing this load. The
+    /// start offset comes from the data request's currentOffset so a retry resumes where the previous
+    /// attempt stopped instead of refetching from the beginning.
+    private func startRequest(for loadingRequest: AVAssetResourceLoadingRequest) {
         var request = URLRequest(url: realURL)
         request.setValue(authHeader, forHTTPHeaderField: "Authorization")
         if let dataRequest = loadingRequest.dataRequest {
+            let start = dataRequest.currentOffset
             if dataRequest.requestsAllDataToEndOfResource {
-                request.setValue("bytes=\(dataRequest.requestedOffset)-", forHTTPHeaderField: "Range")
+                request.setValue("bytes=\(start)-", forHTTPHeaderField: "Range")
             } else {
                 let end = dataRequest.requestedOffset + Int64(dataRequest.requestedLength) - 1
-                request.setValue("bytes=\(dataRequest.requestedOffset)-\(end)", forHTTPHeaderField: "Range")
+                request.setValue("bytes=\(start)-\(end)", forHTTPHeaderField: "Range")
             }
         } else {
             request.setValue("bytes=0-1", forHTTPHeaderField: "Range")
@@ -406,7 +423,6 @@ extension NCVideoStreamLoader: AVAssetResourceLoaderDelegate {
         pendingTasks[task.taskIdentifier] = task
         lock.unlock()
         task.resume()
-        return true
     }
 
     func resourceLoader(_ resourceLoader: AVAssetResourceLoader,
@@ -418,6 +434,7 @@ extension NCVideoStreamLoader: AVAssetResourceLoaderDelegate {
             pendingRequests[identifier] = nil
             pendingTasks[identifier] = nil
         }
+        retryByRequest[ObjectIdentifier(loadingRequest)] = nil
         lock.unlock()
         task?.cancel()
     }
@@ -467,10 +484,42 @@ extension NCVideoStreamLoader: URLSessionDataDelegate {
         pendingRequests[task.taskIdentifier] = nil
         pendingTasks[task.taskIdentifier] = nil
         lock.unlock()
-        if let error = error as NSError?, error.code != NSURLErrorCancelled {
-            loadingRequest?.finishLoading(with: error)
-        } else if error == nil {
-            loadingRequest?.finishLoading()
+        guard let loadingRequest else { return }
+
+        guard let error = error as NSError? else {
+            lock.lock(); retryByRequest[ObjectIdentifier(loadingRequest)] = nil; lock.unlock()
+            loadingRequest.finishLoading()
+            return
+        }
+        if error.code == NSURLErrorCancelled {
+            return
+        }
+        // Retry transient network failures (resuming from currentOffset) so a blip becomes a short
+        // buffer instead of a failed item that falls back to the download player.
+        let identifier = ObjectIdentifier(loadingRequest)
+        lock.lock(); let retries = retryByRequest[identifier] ?? 0; lock.unlock()
+        if Self.isTransient(error), retries < maxRetries, !loadingRequest.isFinished, !loadingRequest.isCancelled {
+            lock.lock(); retryByRequest[identifier] = retries + 1; lock.unlock()
+            let delay = min(2.0, 0.4 * Double(retries + 1))
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, !loadingRequest.isFinished, !loadingRequest.isCancelled else { return }
+                self.startRequest(for: loadingRequest)
+            }
+            return
+        }
+        lock.lock(); retryByRequest[identifier] = nil; lock.unlock()
+        loadingRequest.finishLoading(with: error)
+    }
+
+    private static func isTransient(_ error: NSError) -> Bool {
+        guard error.domain == NSURLErrorDomain else { return false }
+        switch error.code {
+        case NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet,
+             NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed,
+             NSURLErrorResourceUnavailable, NSURLErrorRequestBodyStreamExhausted:
+            return true
+        default:
+            return false
         }
     }
 }
