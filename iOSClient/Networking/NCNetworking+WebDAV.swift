@@ -725,24 +725,13 @@ extension NCNetworking {
         } else if utilityFileSystem.fileProviderStorageExists(metadata) {
             completition(URL(fileURLWithPath: utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId, fileName: metadata.fileNameView, userId: metadata.userId, urlBase: metadata.urlBase)), false, .success)
         } else {
-            NextcloudKit.shared.getDirectDownload(fileId: metadata.fileId, account: metadata.account) { task in
-                Task {
-                    let identifier = await NCNetworking.shared.networkingTasks.createIdentifier(account: metadata.account,
-                                                                                                path: metadata.fileId,
-                                                                                                name: "getDirectDownload")
-                    await NCNetworking.shared.networkingTasks.track(identifier: identifier, task: task)
-                }
-            } completion: { _, url, _, error in
-                if error == .success && url != nil {
-                    if let url = URL(string: url!) {
-                        completition(url, false, error)
-                    } else {
-                        completition(nil, false, error)
-                    }
-                } else {
-                    completition(nil, false, error)
-                }
-            }
+            // PrivateCloud: the server is reachable only through Cloudflare mTLS. A direct-download
+            // stream URL would be fetched by the media player (AVPlayer / VLC) using its own
+            // networking, which cannot present the device client certificate, so Cloudflare rejects
+            // the connection and playback silently fails. Return no stream URL so the caller
+            // downloads the file first via the app's mTLS session and plays it locally (this also
+            // gives instant seeking instead of network-bound scrubbing).
+            completition(nil, false, .success)
         }
     }
 }
