@@ -227,16 +227,16 @@ class NCFilesNavigationController: NCMainNavigationController {
                 NCActivityIndicator.shared.startActivity(backgroundView: self.controller?.view, style: .large, blurEffect: true)
                 NCNetworking.shared.cancelAllTask()
                 try? await Task.sleep(for: .seconds(1))
-                NCNetworking.shared.removeServerErrorAccount(self.session.account)
-                NCManageDatabase.shared.clearDBCache()
+                // PrivateCloud: free the on-disk caches (downloaded files + previews — the bulk of the
+                // space) but keep the database metadata and do NOT post notificationCenterClearCache.
+                // That way the Media gallery isn't wiped and rebuilt; it just re-fetches thumbnails
+                // lazily. (The old full clear also did clearDBCache(), which wiped tableMetadata.)
                 let ufs = NCUtilityFileSystem()
                 ufs.removeGroupDirectoryProviderStorage()
                 ufs.removeGroupLibraryDirectory()
                 ufs.removeDocumentsDirectory()
                 ufs.removeTemporaryDirectory()
                 ufs.createDirectoryStandard()
-                await NCService().startRequestServicesServer(account: self.session.account, controller: self.controller)
-                NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterClearCache)
                 NCActivityIndicator.shared.stop()
             }
         })
