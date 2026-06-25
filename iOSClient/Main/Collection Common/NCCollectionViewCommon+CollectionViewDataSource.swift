@@ -46,7 +46,10 @@ extension NCCollectionViewCommon: UICollectionViewDataSource {
         let existsImagePreview = self.utilityFileSystem.fileProviderStorageImageExists(metadata.ocId, etag: metadata.etag, userId: metadata.userId, urlBase: metadata.urlBase)
         let ext = self.global.getSizeExtension(column: self.numberOfColumns)
 
-        if metadata.hasPreview,
+        // PrivateCloud: request a server preview for videos even when the cached hasPreview flag is
+        // false. Video previews were enabled on the server after these rows were first synced, so
+        // hasPreview is stale; the Media tab already always requests, this brings Files in line.
+        if metadata.hasPreview || metadata.isVideo,
            !existsImagePreview,
            self.networking.downloadThumbnailQueue.operations.filter({ ($0 as? NCMediaDownloadThumbnail)?.metadata.ocId == metadata.ocId }).isEmpty {
             self.networking.downloadThumbnailQueue.addOperation(NCCollectionViewDownloadThumbnail(metadata: metadata, collectionView: collectionView, ext: ext))
