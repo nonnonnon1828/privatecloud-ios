@@ -39,6 +39,7 @@ class NCMedia: UIViewController {
     var photoImage = UIImage()
     var videoImage = UIImage()
     var pinchGesture: UIPinchGestureRecognizer = UIPinchGestureRecognizer()
+    var longPressSelectGesture = UILongPressGestureRecognizer()
 
     var lastScale: CGFloat = 1.0
     var currentScale: CGFloat = 1.0
@@ -97,7 +98,9 @@ class NCMedia: UIViewController {
         collectionView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         collectionView.backgroundColor = .systemBackground
         collectionView.prefetchDataSource = self
-        collectionView.dragInteractionEnabled = true
+        // PrivateCloud: drag-out is disabled so a long-press is free for paint-selection
+        // (long-press a photo, then drag to select many at once).
+        collectionView.dragInteractionEnabled = false
         collectionView.dragDelegate = self
         collectionView.dropDelegate = self
         collectionView.accessibilityIdentifier = "NCMedia"
@@ -131,6 +134,12 @@ class NCMedia: UIViewController {
 
         pinchGesture = UIPinchGestureRecognizer(target: self, action: #selector(handlePinchGesture(_:)))
         collectionView.addGestureRecognizer(pinchGesture)
+
+        // PrivateCloud: long-press to enter selection and drag to paint-select (Apple Photos style).
+        longPressSelectGesture = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPressSelect(_:)))
+        longPressSelectGesture.minimumPressDuration = 0.3
+        longPressSelectGesture.delegate = self
+        collectionView.addGestureRecognizer(longPressSelectGesture)
 
         NotificationCenter.default.addObserver(forName: NSNotification.Name(rawValue: global.notificationCenterChangeUser), object: nil, queue: nil) { notification in
             Task { @MainActor in

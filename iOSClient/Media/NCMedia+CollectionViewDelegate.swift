@@ -33,6 +33,10 @@ extension NCMedia: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration? {
+        // PrivateCloud: while selecting (long-press paint), suppress the single-item context menu.
+        guard !isEditMode else {
+            return nil
+        }
         guard let ocId = dataSource.getMetadata(indexPath: indexPath)?.ocId,
               let metadata = database.getMetadataFromOcId(ocId)
         else {

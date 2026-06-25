@@ -6,6 +6,8 @@ import UIKit
 import SwiftUI
 
 protocol NCMediaSelectTabBarDelegate: AnyObject {
+    func selectAll()
+    func download()
     func move()
     func share()
     func delete()
@@ -90,6 +92,25 @@ struct MediaTabBarSelectView: View {
             Spacer().frame(height: sizeClass == .compact ? 5 : 10)
 
             HStack {
+                Button {
+                    tabBarSelect.delegate?.selectAll()
+                } label: {
+                    Image(systemName: "checklist")
+                        .font(.icon(23))
+                }
+                .tint(Color(NCBrandColor.shared.iconImageColor))
+                .frame(maxWidth: .infinity)
+
+                Button {
+                    tabBarSelect.delegate?.download()
+                } label: {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.icon(23))
+                }
+                .tint(Color(NCBrandColor.shared.iconImageColor))
+                .frame(maxWidth: .infinity)
+                .disabled(tabBarSelect.selectCount == 0)
+
                 Button {
                   tabBarSelect.delegate?.share()
                 } label: {

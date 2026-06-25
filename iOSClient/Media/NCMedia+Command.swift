@@ -75,6 +75,39 @@ extension NCMedia {
 }
 
 extension NCMedia: NCMediaSelectTabBarDelegate {
+    func selectAll() {
+        fileSelect = dataSource.metadatas.map { $0.ocId }
+        tabBarSelect.selectCount = fileSelect.count
+        collectionView.reloadData()
+    }
+
+    /// PrivateCloud: one-tap "download" = save the selected photos/videos to the iOS photo
+    /// library (camera roll). Queue each as a background download tagged with `selectorSaveAlbum`;
+    /// the transfer pipeline downloads the full-resolution file and the transfer delegate writes
+    /// it to the camera roll on completion. This makes "share" and "download" clearly separate.
+    func download() {
+        Task {
+            let ocIds = self.fileSelect.map { $0 }
+            let metadatas = await database.getMetadatasFromOcIdsAsync(ocIds)
+            let mediaToSave = metadatas.filter { $0.isImage || $0.isVideo }
+
+            setEditMode(false)
+
+            guard !mediaToSave.isEmpty else {
+                return
+            }
+            await showInfoBanner(windowScene: windowScene, text: "_download_in_progress_")
+
+            for metadata in mediaToSave {
+                _ = await database.setMetadataSessionInWaitDownloadAsync(
+                    ocId: metadata.ocId,
+                    session: networking.sessionDownloadBackground,
+                    selector: global.selectorSaveAlbum,
+                    sceneIdentifier: controller?.sceneIdentifier)
+            }
+        }
+    }
+
     func move() {
         Task {
             let ocIds = self.fileSelect.map { $0 }
@@ -162,6 +195,50 @@ extension NCMedia: NCMediaSelectTabBarDelegate {
                 self.dataSource.removeMetadata([ocId])
                 self.collectionViewReloadData()
             }
+        }
+    }
+}
+
+// MARK: - Long-press paint selection (PrivateCloud)
+
+extension NCMedia: UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        return true
+    }
+
+    /// Long-press a photo to enter selection, then drag a finger across the grid to select many
+    /// items in one stroke. Scrolling is suspended while painting so the drag doesn't scroll.
+    @objc func handleLongPressSelect(_ gesture: UILongPressGestureRecognizer) {
+        let point = gesture.location(in: collectionView)
+
+        switch gesture.state {
+        case .began:
+            guard collectionView.indexPathForItem(at: point) != nil else {
+                return
+            }
+            if !isEditMode {
+                setEditMode(true)
+            }
+            collectionView.isScrollEnabled = false
+            paintSelect(at: point)
+        case .changed:
+            paintSelect(at: point)
+        default:
+            collectionView.isScrollEnabled = true
+        }
+    }
+
+    private func paintSelect(at point: CGPoint) {
+        guard isEditMode,
+              let indexPath = collectionView.indexPathForItem(at: point),
+              let metadata = dataSource.getMetadata(indexPath: indexPath),
+              !fileSelect.contains(metadata.ocId) else {
+            return
+        }
+        fileSelect.append(metadata.ocId)
+        tabBarSelect.selectCount = fileSelect.count
+        if let cell = collectionView.cellForItem(at: indexPath) as? NCMediaCell {
+            cell.selected(true, color: NCBrandColor.shared.getElement(account: session.account))
         }
     }
 }
