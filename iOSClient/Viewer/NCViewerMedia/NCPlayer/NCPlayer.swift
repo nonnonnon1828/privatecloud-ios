@@ -693,9 +693,36 @@ final class NCStreamPlayerViewController: UIViewController {
         singleTap.require(toFail: doubleTap)
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         longPress.minimumPressDuration = 0.35
+        let panDismiss = UIPanGestureRecognizer(target: self, action: #selector(handlePanDismiss(_:)))
+        panDismiss.delegate = self
         view.addGestureRecognizer(singleTap)
         view.addGestureRecognizer(doubleTap)
         view.addGestureRecognizer(longPress)
+        view.addGestureRecognizer(panDismiss)
+    }
+
+    @objc private func handlePanDismiss(_ gesture: UIPanGestureRecognizer) {
+        let translation = gesture.translation(in: view)
+        switch gesture.state {
+        case .changed:
+            if translation.y > 0 {
+                view.transform = CGAffineTransform(translationX: 0, y: translation.y)
+                view.alpha = max(0.4, 1 - translation.y / 600)
+            }
+        case .ended, .cancelled, .failed:
+            let velocity = gesture.velocity(in: view).y
+            if translation.y > 120 || velocity > 900 {
+                player.pause()
+                dismiss(animated: true)
+            } else {
+                UIView.animate(withDuration: 0.2) {
+                    self.view.transform = .identity
+                    self.view.alpha = 1
+                }
+            }
+        default:
+            break
+        }
     }
 
     private func observePlayer() {
@@ -859,5 +886,15 @@ final class NCStreamPlayerViewController: UIViewController {
 
     private static func controlSymbol(_ name: String) -> UIImage? {
         UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 44, weight: .regular))
+    }
+}
+
+extension NCStreamPlayerViewController: UIGestureRecognizerDelegate {
+    // Only let the swipe-to-dismiss pan begin for primarily-vertical drags, so horizontal
+    // scrubber drags (and the rest of the controls) are not hijacked.
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+        let velocity = pan.velocity(in: view)
+        return abs(velocity.y) > abs(velocity.x)
     }
 }
