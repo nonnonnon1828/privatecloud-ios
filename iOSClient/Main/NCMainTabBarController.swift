@@ -50,6 +50,7 @@ class NCMainTabBarController: UITabBarController {
         configureMoreController()
         configureTabBarItems()
         configureTabBarAppearance()
+        setupTabSwipeGestures()
 
         NotificationCenter.default.addObserver(forName: NSNotification.Name(rawValue: self.global.notificationCenterChangeTheming), object: nil, queue: .main) { [weak self] notification in
             if let userInfo = notification.userInfo as? NSDictionary,
@@ -100,6 +101,25 @@ class NCMainTabBarController: UITabBarController {
 
         tabBar.standardAppearance = appearance
         tabBar.scrollEdgeAppearance = appearance
+    }
+
+    // PrivateCloud: swipe left/right to move between the main tabs. Gated (see
+    // gestureRecognizerShouldBegin) so it only acts at a tab's root grid, never while selecting,
+    // drilled into a detail/viewer, or with something presented — where it would fight other gestures.
+    private func setupTabSwipeGestures() {
+        for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
+            let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleTabSwipe(_:)))
+            swipe.direction = direction
+            swipe.delegate = self
+            view.addGestureRecognizer(swipe)
+        }
+    }
+
+    @objc private func handleTabSwipe(_ gesture: UISwipeGestureRecognizer) {
+        guard let count = viewControllers?.count, count > 0 else { return }
+        let index = gesture.direction == .left ? selectedIndex + 1 : selectedIndex - 1
+        guard index >= 0, index < count, index != selectedIndex else { return }
+        selectedIndex = index
     }
 
     private func configureMoreController() {
@@ -233,5 +253,28 @@ extension NCMainTabBarController: UITabBarControllerDelegate {
         if let scrollView = topViewController.view.subviews.compactMap({ $0 as? UIScrollView }).first {
             scrollView.setContentOffset(CGPoint(x: 0, y: -scrollView.adjustedContentInset.top), animated: true)
         }
+    }
+}
+
+extension NCMainTabBarController: UIGestureRecognizerDelegate {
+    /// Allow the tab swipe only at a tab's root grid: not while something is presented, not when
+    /// drilled into a detail/viewer (pushed), and not in selection mode (drag-to-select conflicts).
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if presentedViewController != nil {
+            return false
+        }
+        guard let navigationController = selectedViewController as? UINavigationController else {
+            return true
+        }
+        if navigationController.viewControllers.count > 1 {
+            return false
+        }
+        if let common = navigationController.topViewController as? NCCollectionViewCommon, common.isEditMode {
+            return false
+        }
+        if let media = navigationController.topViewController as? NCMedia, media.isEditMode {
+            return false
+        }
+        return true
     }
 }
