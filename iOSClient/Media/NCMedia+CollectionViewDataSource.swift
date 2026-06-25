@@ -65,13 +65,11 @@ extension NCMedia: UICollectionViewDataSource {
         cell.date = metadata.date
         cell.ocId = metadata.ocId
         cell.imageStatus.image = nil
+        // PrivateCloud: clearer video markers (top-right badge always, centred play on big tiles).
+        cell.setVideo(metadata.isVideo, largeTile: cell.imageItem.frame.width > 60)
 
-        if cell.imageItem.frame.width > 60 {
-            if metadata.isVideo {
-                cell.imageStatus.image = playImage
-            } else if metadata.isLivePhoto {
-                cell.imageStatus.image = livePhotoImage
-            }
+        if cell.imageItem.frame.width > 60, metadata.isLivePhoto {
+            cell.imageStatus.image = livePhotoImage
         }
 
         if isEditMode, fileSelect.contains(metadata.ocId) {

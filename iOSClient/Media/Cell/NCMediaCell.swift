@@ -29,11 +29,14 @@ class NCMediaCell: UICollectionViewCell {
     @IBOutlet weak var imageSelect: UIImageView!
     @IBOutlet weak var imageStatus: UIImageView!
 
+    let videoBadgeView = UIImageView()
+    let videoCenterPlay = UIImageView()
     var ocId: String = ""
     var date: Date?
 
     override func awakeFromNib() {
         super.awakeFromNib()
+        setupVideoIndicators()
         initCell()
     }
 
@@ -45,6 +48,8 @@ class NCMediaCell: UICollectionViewCell {
     func initCell() {
         imageStatus.image = nil
         imageItem.image = nil
+        videoBadgeView.isHidden = true
+        videoCenterPlay.isHidden = true
 
         imageVisualEffect.isHidden = false
         imageVisualEffect.effect = nil
@@ -57,5 +62,50 @@ class NCMediaCell: UICollectionViewCell {
         imageVisualEffect.alpha = status ? 1 : 0
         imageSelect.alpha = status ? 1 : 0
         imageSelect.image = NCImageCache.shared.getImageCheckedYes(color: color)
+    }
+
+    // PrivateCloud: make videos easy to tell apart from photos. A small marker sits in the
+    // top-right corner of every video tile, and a larger centred play symbol is shown on
+    // tiles big enough for it (the stock bottom-right play glyph alone was too subtle).
+    private func setupVideoIndicators() {
+        videoBadgeView.image = UIImage(systemName: "video.fill")
+        videoBadgeView.tintColor = .white
+        videoBadgeView.contentMode = .scaleAspectFit
+        videoBadgeView.isHidden = true
+        videoBadgeView.translatesAutoresizingMaskIntoConstraints = false
+        videoBadgeView.layer.shadowColor = UIColor.black.cgColor
+        videoBadgeView.layer.shadowOpacity = 0.6
+        videoBadgeView.layer.shadowRadius = 2
+        videoBadgeView.layer.shadowOffset = .zero
+
+        videoCenterPlay.image = UIImage(systemName: "play.circle.fill")
+        videoCenterPlay.tintColor = UIColor.white.withAlphaComponent(0.9)
+        videoCenterPlay.contentMode = .scaleAspectFit
+        videoCenterPlay.isHidden = true
+        videoCenterPlay.translatesAutoresizingMaskIntoConstraints = false
+        videoCenterPlay.layer.shadowColor = UIColor.black.cgColor
+        videoCenterPlay.layer.shadowOpacity = 0.5
+        videoCenterPlay.layer.shadowRadius = 3
+        videoCenterPlay.layer.shadowOffset = .zero
+
+        contentView.addSubview(videoCenterPlay)
+        contentView.addSubview(videoBadgeView)
+
+        NSLayoutConstraint.activate([
+            videoBadgeView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 5),
+            videoBadgeView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 5),
+            videoBadgeView.widthAnchor.constraint(equalToConstant: 18),
+            videoBadgeView.heightAnchor.constraint(equalToConstant: 18),
+
+            videoCenterPlay.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            videoCenterPlay.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            videoCenterPlay.widthAnchor.constraint(equalToConstant: 44),
+            videoCenterPlay.heightAnchor.constraint(equalToConstant: 44)
+        ])
+    }
+
+    func setVideo(_ isVideo: Bool, largeTile: Bool) {
+        videoBadgeView.isHidden = !isVideo
+        videoCenterPlay.isHidden = !(isVideo && largeTile)
     }
 }
