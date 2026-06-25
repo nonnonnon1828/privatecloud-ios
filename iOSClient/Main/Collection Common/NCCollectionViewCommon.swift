@@ -249,7 +249,9 @@ class NCCollectionViewCommon: UIViewController, NCAccountSettingsModelDelegate, 
         }
 
         let longPressedGesture = UILongPressGestureRecognizer(target: self, action: #selector(longPressCollecationView(_:)))
-        longPressedGesture.minimumPressDuration = 0.5
+        // PrivateCloud: 0.3s so this fires before the system context menu (~0.5s); long-pressing an
+        // item enters selection mode instead of showing the menu (the menu is suppressed in edit mode).
+        longPressedGesture.minimumPressDuration = 0.3
         longPressedGesture.delegate = self
         longPressedGesture.delaysTouchesBegan = true
         collectionView.addGestureRecognizer(longPressedGesture)
@@ -592,7 +594,26 @@ class NCCollectionViewCommon: UIViewController, NCAccountSettingsModelDelegate, 
     // MARK: - TAP EVENT
 
     @objc func longPressCollecationView(_ gestureRecognizer: UILongPressGestureRecognizer) {
-        openMenuItems(with: nil, gestureRecognizer: gestureRecognizer)
+        guard gestureRecognizer.state == .began else { return }
+        let point = gestureRecognizer.location(in: collectionView)
+        // PrivateCloud: long-pressing a file/folder enters selection mode (with haptic) and selects
+        // it, instead of opening the context menu. Long-pressing empty space keeps the edit menu.
+        if let indexPath = collectionView.indexPathForItem(at: point),
+           let metadata = dataSource.getMetadata(indexPath: indexPath) {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            Task {
+                if !isEditMode {
+                    await setEditMode(true)
+                }
+                if !fileSelect.contains(metadata.ocId) {
+                    fileSelect.append(metadata.ocId)
+                    collectionView.reloadItems(at: [indexPath])
+                    tabBarSelect?.update(fileSelect: fileSelect, metadatas: getSelectedMetadatas(), userId: metadata.userId)
+                }
+            }
+        } else {
+            openMenuItems(with: nil, gestureRecognizer: gestureRecognizer)
+        }
     }
 
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {

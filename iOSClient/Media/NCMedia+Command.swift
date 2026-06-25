@@ -216,6 +216,7 @@ extension NCMedia: UIGestureRecognizerDelegate {
             guard collectionView.indexPathForItem(at: point) != nil else {
                 return
             }
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             if !isEditMode {
                 setEditMode(true)
             }

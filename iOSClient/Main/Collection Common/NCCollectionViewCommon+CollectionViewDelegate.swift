@@ -169,6 +169,10 @@ extension NCCollectionViewCommon: UICollectionViewDelegate {
             self.collectionView.reloadItems(at: [indexPath])
             self.tabBarSelect?.update(fileSelect: self.fileSelect, metadatas: self.getSelectedMetadatas(), userId: metadata.userId)
             self.collectionView.collectionViewLayout.invalidateLayout()
+            // PrivateCloud: leave selection mode automatically once nothing is selected.
+            if self.fileSelect.isEmpty {
+                Task { await self.setEditMode(false) }
+            }
             return
         }
 

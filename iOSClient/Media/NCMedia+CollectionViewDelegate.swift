@@ -22,6 +22,10 @@ extension NCMedia: UICollectionViewDelegate {
                     cell.selected(true, color: NCBrandColor.shared.getElement(account: session.account))
                 }
                 tabBarSelect.selectCount = fileSelect.count
+                // PrivateCloud: leave selection mode automatically once nothing is selected.
+                if fileSelect.isEmpty {
+                    setEditMode(false)
+                }
             } else if let metadata = await self.database.getMetadataFromOcIdAsync(metadata.ocId) {
                 // PrivateCloud: videos open in the in-house streaming player (AVPlayer + mTLS byte
                 // ranges, short-video gestures). Photos keep the standard paged viewer.
