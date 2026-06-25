@@ -104,13 +104,17 @@ class NCMainTabBarController: UITabBarController {
         tabBar.scrollEdgeAppearance = appearance
     }
 
-    // PrivateCloud: horizontal paging between the main tabs. On a clear horizontal drag or flick the
-    // current screen is covered by a snapshot of itself, the tab is swapped underneath (so the raw
-    // swap and any reload flash are hidden), then the new tab slides in while the snapshot slides out
-    // — a clean paged transition with a light haptic. A direction lock (see gestureRecognizerShouldBegin)
-    // only starts the pan for clearly horizontal drags so it is never confused with vertical scrolling.
-    // Gated to a tab's root (not while selecting, drilled into a detail/viewer, or with something
-    // presented). Tapping the tab bar always still works.
+    // PrivateCloud: interactive horizontal paging between the main tabs — the screens track the finger.
+    // The two things that make naive paging on a UITabBarController janky are handled: the adjacent
+    // tab's view is moved off-screen BEFORE it is added (so it never flashes at centre when the drag
+    // starts), and on commit the index swap is hidden under a snapshot of the now-centred target (so
+    // the tab controller's own view swap doesn't flash black). A direction lock (see
+    // gestureRecognizerShouldBegin) only starts the pan for clearly horizontal drags so it is never
+    // confused with vertical scrolling. Gated to a tab's root (not while selecting, drilled into a
+    // detail/viewer, or with something presented). Tapping the tab bar always still works.
+    private var tabPanTargetIndex: Int?
+    private var tabPanTargetView: UIView?
+
     private func setupTabSwipeGestures() {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleTabPan(_:)))
         pan.delegate = self
@@ -118,41 +122,75 @@ class NCMainTabBarController: UITabBarController {
     }
 
     @objc private func handleTabPan(_ gesture: UIPanGestureRecognizer) {
-        guard gesture.state == .ended else { return }
-        let width = max(view.bounds.width, 1)
+        guard let currentView = selectedViewController?.view else { return }
         let translationX = gesture.translation(in: view).x
-        let velocityX = gesture.velocity(in: view).x
-        guard abs(translationX) > width * 0.28 || abs(velocityX) > 600 else { return }
-        changeTab(forward: translationX < 0)
+        let width = max(view.bounds.width, 1)
+
+        switch gesture.state {
+        case .changed:
+            if tabPanTargetIndex == nil {
+                guard abs(translationX) > 1 else { return }
+                let target = translationX < 0 ? selectedIndex + 1 : selectedIndex - 1
+                guard let count = viewControllers?.count, target >= 0, target < count,
+                      let targetView = viewControllers?[target].view else { return }
+                tabPanTargetIndex = target
+                tabPanTargetView = targetView
+                targetView.frame = currentView.frame
+                targetView.transform = CGAffineTransform(translationX: translationX < 0 ? width : -width, y: 0)
+                view.insertSubview(targetView, belowSubview: tabBar)
+            }
+            guard let target = tabPanTargetIndex, let targetView = tabPanTargetView else { return }
+            let forward = target > selectedIndex
+            let clamped = forward ? min(0, translationX) : max(0, translationX)
+            let base = forward ? width : -width
+            currentView.transform = CGAffineTransform(translationX: clamped, y: 0)
+            targetView.transform = CGAffineTransform(translationX: base + clamped, y: 0)
+        case .ended, .cancelled, .failed:
+            finishTabPan(translationX: translationX, velocityX: gesture.velocity(in: view).x, width: width, currentView: currentView)
+        default:
+            break
+        }
     }
 
-    private func changeTab(forward: Bool) {
-        guard let count = viewControllers?.count, count > 0,
-              let currentView = selectedViewController?.view else { return }
-        let target = forward ? selectedIndex + 1 : selectedIndex - 1
-        guard target >= 0, target < count, target != selectedIndex else { return }
-        let width = view.bounds.width
-
-        let snapshot = currentView.snapshotView(afterScreenUpdates: false)
-        if let snapshot {
-            snapshot.frame = currentView.frame
-            view.insertSubview(snapshot, belowSubview: tabBar)
-        }
-        UISelectionFeedbackGenerator().selectionChanged()
-        selectedIndex = target
-
-        guard let newView = selectedViewController?.view else {
-            snapshot?.removeFromSuperview()
+    private func finishTabPan(translationX: CGFloat, velocityX: CGFloat, width: CGFloat, currentView: UIView) {
+        guard let target = tabPanTargetIndex, let targetView = tabPanTargetView else {
+            resetTabPan()
             return
         }
-        newView.transform = CGAffineTransform(translationX: forward ? width : -width, y: 0)
-        UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseOut, animations: {
-            newView.transform = .identity
-            snapshot?.transform = CGAffineTransform(translationX: forward ? -width : width, y: 0)
-        }, completion: { _ in
-            newView.transform = .identity
-            snapshot?.removeFromSuperview()
-        })
+        let forward = target > selectedIndex
+        let base = forward ? width : -width
+        let commit = abs(translationX) / width > 0.3 || abs(velocityX) > 700
+        if commit {
+            UISelectionFeedbackGenerator().selectionChanged()
+            UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut, animations: {
+                currentView.transform = CGAffineTransform(translationX: -base, y: 0)
+                targetView.transform = .identity
+            }, completion: { _ in
+                let cover = targetView.snapshotView(afterScreenUpdates: false)
+                if let cover {
+                    cover.frame = targetView.frame
+                    self.view.insertSubview(cover, belowSubview: self.tabBar)
+                }
+                currentView.transform = .identity
+                targetView.transform = .identity
+                self.selectedIndex = target
+                DispatchQueue.main.async { cover?.removeFromSuperview() }
+                self.resetTabPan()
+            })
+        } else {
+            UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut, animations: {
+                currentView.transform = .identity
+                targetView.transform = CGAffineTransform(translationX: base, y: 0)
+            }, completion: { _ in
+                targetView.removeFromSuperview()
+                self.resetTabPan()
+            })
+        }
+    }
+
+    private func resetTabPan() {
+        tabPanTargetIndex = nil
+        tabPanTargetView = nil
     }
 
     private func configureMoreController() {
