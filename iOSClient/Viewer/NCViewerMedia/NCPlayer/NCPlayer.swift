@@ -491,7 +491,6 @@ final class NCStreamPlayerViewController: UIViewController {
     var onUnsupported: (() -> Void)?
 
     private let controlsView = UIView()
-    private let topBar = UIView()
     private let bottomBar = UIView()
     private let closeButton = UIButton(type: .system)
     private let titleLabel = UILabel()
@@ -590,11 +589,10 @@ final class NCStreamPlayerViewController: UIViewController {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         controlsView.addSubview(titleLabel)
 
-        playPauseButton.setImage(UIImage(systemName: "pause.fill"), for: .normal)
+        playPauseButton.setImage(Self.controlSymbol("pause.fill"), for: .normal)
         playPauseButton.tintColor = .white
         playPauseButton.translatesAutoresizingMaskIntoConstraints = false
         playPauseButton.addTarget(self, action: #selector(togglePlayPause), for: .touchUpInside)
-        playPauseButton.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 44, weight: .regular)
         controlsView.addSubview(playPauseButton)
 
         currentTimeLabel.text = "0:00"
@@ -736,9 +734,9 @@ final class NCStreamPlayerViewController: UIViewController {
             spinner.stopAnimating()
         }
         if status == .paused {
-            playPauseButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
+            playPauseButton.setImage(Self.controlSymbol("play.fill"), for: .normal)
         } else {
-            playPauseButton.setImage(UIImage(systemName: "pause.fill"), for: .normal)
+            playPauseButton.setImage(Self.controlSymbol("pause.fill"), for: .normal)
         }
     }
 
@@ -857,5 +855,9 @@ final class NCStreamPlayerViewController: UIViewController {
         let total = Int(seconds)
         let h = total / 3600, m = (total % 3600) / 60, s = total % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+
+    private static func controlSymbol(_ name: String) -> UIImage? {
+        UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 44, weight: .regular))
     }
 }
