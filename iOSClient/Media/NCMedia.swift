@@ -138,11 +138,9 @@ class NCMedia: UIViewController {
         pinchGesture = UIPinchGestureRecognizer(target: self, action: #selector(handlePinchGesture(_:)))
         collectionView.addGestureRecognizer(pinchGesture)
 
-        // PrivateCloud: long-press to enter selection and drag to paint-select (Apple Photos style).
-        longPressSelectGesture = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPressSelect(_:)))
-        longPressSelectGesture.minimumPressDuration = 0.3
-        longPressSelectGesture.delegate = self
-        collectionView.addGestureRecognizer(longPressSelectGesture)
+        // PrivateCloud: selection mode is entered from the deliberate long-press that used to open the
+        // context menu (see contextMenuConfigurationForItemAt), NOT a short 0.3s long-press — the short
+        // one fired on a brief scroll pause and selected items by accident.
 
         NotificationCenter.default.addObserver(forName: NSNotification.Name(rawValue: global.notificationCenterChangeUser), object: nil, queue: nil) { notification in
             Task { @MainActor in

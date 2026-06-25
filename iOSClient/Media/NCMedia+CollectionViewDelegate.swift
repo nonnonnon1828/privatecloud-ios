@@ -44,24 +44,23 @@ extension NCMedia: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration? {
-        // PrivateCloud: while selecting (long-press paint), suppress the single-item context menu.
-        guard !isEditMode else {
-            return nil
+        // PrivateCloud: the deliberate long-press (the gesture that used to open the context menu, and
+        // which — unlike a short long-press — does not fire on a scroll pause) now enters selection
+        // mode and selects this item. No menu is shown.
+        if let metadata = dataSource.getMetadata(indexPath: indexPath) {
+            let ocId = metadata.ocId
+            DispatchQueue.main.async {
+                if !self.isEditMode {
+                    self.setEditMode(true)
+                }
+                if !self.fileSelect.contains(ocId) {
+                    self.fileSelect.append(ocId)
+                    self.tabBarSelect.selectCount = self.fileSelect.count
+                    self.collectionView.reloadItems(at: [indexPath])
+                }
+            }
         }
-        guard let ocId = dataSource.getMetadata(indexPath: indexPath)?.ocId,
-              let metadata = database.getMetadataFromOcId(ocId)
-        else {
-            return nil
-        }
-        let identifier = indexPath as NSCopying
-        let image = utility.getImage(ocId: metadata.ocId, etag: metadata.etag, ext: global.previewExt1024, userId: metadata.userId, urlBase: metadata.urlBase)
-
-        return UIContextMenuConfiguration(identifier: identifier, previewProvider: {
-            return NCViewerProviderContextMenu(metadata: metadata, image: image, sceneIdentifier: self.sceneIdentifier)
-        }, actionProvider: { _ in
-            let contextMenu = NCContextMenuMain(metadata: metadata.detachedCopy(), viewController: self, controller: self.controller, sender: collectionView)
-            return contextMenu.viewMenu()
-        })
+        return nil
     }
 
     func collectionView(_ collectionView: UICollectionView, willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionCommitAnimating) {
