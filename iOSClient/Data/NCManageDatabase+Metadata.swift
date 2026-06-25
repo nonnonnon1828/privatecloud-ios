@@ -876,6 +876,26 @@ extension NCManageDatabase {
         return true
     }
 
+    /// PrivateCloud: `mergeRemoteMetadatasAsync` reconciles by ocId only, so media already
+    /// stored keeps its old (mtime-derived) `date`. Re-apply the capture date carried by the
+    /// freshly converted remote metadata so the gallery re-sorts. Writes by primary key and
+    /// only when a value actually differs, so repeated media loads stay no-ops.
+    func updateMediaCaptureDatesAsync(remoteMetadatas: [tableMetadata]) async {
+        await core.performRealmWriteAsync { realm in
+            for remote in remoteMetadatas {
+                guard let local = realm.object(ofType: tableMetadata.self, forPrimaryKey: remote.ocId) else {
+                    continue
+                }
+                if local.date != remote.date {
+                    local.date = remote.date
+                }
+                if local.datePhotosOriginal != remote.datePhotosOriginal {
+                    local.datePhotosOriginal = remote.datePhotosOriginal
+                }
+            }
+        }
+    }
+
     // MARK: - Realm Read
 
     func getAllTableMetadataAsync() async -> [tableMetadata] {

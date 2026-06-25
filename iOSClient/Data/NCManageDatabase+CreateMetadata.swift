@@ -8,6 +8,33 @@ import RealmSwift
 import NextcloudKit
 import Photos
 
+/// Parses the capture date encoded at the start of a media file name by the iOS
+/// auto-upload ("YY-MM-DD HH-MM-SS …", e.g. "24-08-01 14-37-49 0002.jpeg").
+enum NCMediaCaptureDate {
+    private static let regex = try? NSRegularExpression(pattern: #"^(\d{2})-(\d{2})-(\d{2})[ _](\d{2})-(\d{2})-(\d{2})"#)
+
+    static func fromFileName(_ fileName: String) -> Date? {
+        guard let regex else { return nil }
+        let range = NSRange(fileName.startIndex..., in: fileName)
+        guard let match = regex.firstMatch(in: fileName, range: range) else { return nil }
+        func value(_ index: Int) -> Int? {
+            guard let valueRange = Range(match.range(at: index), in: fileName) else { return nil }
+            return Int(fileName[valueRange])
+        }
+        guard let yy = value(1), let month = value(2), let day = value(3),
+              let hour = value(4), let minute = value(5), let second = value(6),
+              (1...12).contains(month), (1...31).contains(day) else { return nil }
+        var components = DateComponents()
+        components.year = 2000 + yy
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.minute = minute
+        components.second = second
+        return Calendar.current.date(from: components)
+    }
+}
+
 final class NCManageDatabaseCreateMetadata {
     func convertFileToMetadataAsync(_ file: NKFile, mediaSearch: Bool = false, isDirectoryE2EE: Bool? = nil) async -> tableMetadata {
         let metadata = self.createMetadata(file)
@@ -154,6 +181,17 @@ final class NCManageDatabaseCreateMetadata {
             metadata.datePhotosOriginal = datePhotosOriginal as NSDate
         } else {
             metadata.datePhotosOriginal = metadata.date
+        }
+        // PrivateCloud: media was bulk-migrated, so getlastmodified (mtime) all points at
+        // the migration time → the gallery order/grouping is wrong. Use the real capture
+        // date instead: the date in the file name ("YY-MM-DD HH-MM-SS …"), then EXIF.
+        if file.contentType.hasPrefix("image/") || file.contentType.hasPrefix("video/") {
+            if let captureDate = NCMediaCaptureDate.fromFileName(file.fileName) {
+                metadata.date = captureDate as NSDate
+                metadata.datePhotosOriginal = captureDate as NSDate
+            } else if let exif = file.datePhotosOriginal {
+                metadata.date = exif as NSDate
+            }
         }
         metadata.directory = file.directory
         metadata.downloadURL = file.downloadURL

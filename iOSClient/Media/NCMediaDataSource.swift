@@ -120,11 +120,16 @@ extension NCMedia {
                     greaterDate = Calendar.current.date(byAdding: .second, value: -1, to: lastCellDate ?? .distantPast) ?? .distantPast
                 }
             }
+
+            // PrivateCloud: media mtime is unreliable (a bulk migration clustered all
+            // timestamps into the same seconds), which broke the ±1s mtime-window
+            // pagination → items silently dropped. Load the whole library in one pass and
+            // let the gallery sort by capture date from the DB instead.
+            lessDate = .distantFuture
+            greaterDate = .distantPast
         }
 
-        let limit = await MainActor.run {
-            max(self.collectionView.visibleCells.count * 3, 300)
-        }
+        let limit = 99999
 
         let options = NKRequestOptions(timeout: 180, taskDescription: self.global.taskDescriptionRetrievesProperties, queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)
 
@@ -180,7 +185,20 @@ extension NCMedia {
                 self.searchMediaInProgress = false
             }
 
-            if await database.mergeRemoteMetadatasAsync(remoteMetadatas: remoteMetadatas, localMetadatas: localMetadatas) {
+            // PrivateCloud: the merge below only adds/removes by ocId, so media already in the
+            // DB keeps its old (mtime) date. Detect whether any already-stored item's capture
+            // date changed and, if so, re-apply it so the gallery re-sorts. Only writes/reloads
+            // when something actually changed, so steady-state media loads stay cheap.
+            let localByOcId = Dictionary(localMetadatas.map { ($0.ocId, $0) }, uniquingKeysWith: { first, _ in first })
+            let needRedate = remoteMetadatas.contains { remote in
+                guard let local = localByOcId[remote.ocId] else { return false }
+                return local.date != remote.date || local.datePhotosOriginal != remote.datePhotosOriginal
+            }
+            if needRedate {
+                await database.updateMediaCaptureDatesAsync(remoteMetadatas: remoteMetadatas)
+            }
+
+            if await database.mergeRemoteMetadatasAsync(remoteMetadatas: remoteMetadatas, localMetadatas: localMetadatas) || needRedate {
                 await loadDataSource()
             } else if await self.dataSource.isEmpty() {
                 await self.collectionViewReloadData()
