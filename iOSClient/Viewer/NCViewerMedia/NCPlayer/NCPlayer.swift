@@ -461,10 +461,15 @@ extension NCVideoStreamLoader: URLSessionDataDelegate {
                 total = parsed
             }
             info.contentLength = total
-            if let mime = http.value(forHTTPHeaderField: "Content-Type")?
+            // Resolve the UTI from the server MIME, falling back to the file extension. Some videos
+            // are served with a generic type (e.g. application/octet-stream) that MIME lookup can't
+            // map, which would leave AVPlayer unable to read the stream and force a fall back.
+            let mime = http.value(forHTTPHeaderField: "Content-Type")?
                 .components(separatedBy: ";").first?
-                .trimmingCharacters(in: .whitespaces),
-               let uti = UTType(mimeType: mime) {
+                .trimmingCharacters(in: .whitespaces)
+            if let mime, let uti = UTType(mimeType: mime) {
+                info.contentType = uti.identifier
+            } else if let uti = UTType(filenameExtension: realURL.pathExtension) {
                 info.contentType = uti.identifier
             }
             info.isByteRangeAccessSupported = http.statusCode == 206
