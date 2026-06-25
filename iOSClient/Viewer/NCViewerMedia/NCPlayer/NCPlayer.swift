@@ -6,6 +6,8 @@ import Foundation
 import NextcloudKit
 import UIKit
 import MobileVLCKit
+import AVFoundation
+import UniformTypeIdentifiers
 
 class NCPlayer: NSObject, VLCMediaDelegate {
     internal var url: URL?
@@ -334,5 +336,526 @@ extension NCPlayer: VLCCustomDialogRendererProtocol {
 
     func cancelDialog(withReference reference: NSValue) {
         // UIAlertController other states...
+    }
+}
+
+// MARK: - PrivateCloud: AVPlayer streaming over the app's mTLS session
+//
+// AVPlayer / AVURLAsset use their own networking and cannot present the device client
+// certificate that the Cloudflare mTLS gate requires, so a plain remote URL never loads.
+// This resource-loader delegate intercepts AVPlayer's byte-range reads and serves them with
+// HTTP Range requests issued from a URLSession that DOES present the client certificate (and
+// the WebDAV basic auth), streaming the bytes back to AVPlayer. The byte-range bridge gives
+// instant start and seeking without downloading the whole file.
+final class NCVideoStreamLoader: NSObject {
+    static let scheme = "ncvideostream"
+
+    private let realURL: URL
+    private let authHeader: String
+    private var pendingRequests: [Int: AVAssetResourceLoadingRequest] = [:]
+    private var pendingTasks: [Int: URLSessionDataTask] = [:]
+    private let lock = NSLock()
+
+    private lazy var session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }()
+
+    init(realURL: URL, user: String, password: String) {
+        self.realURL = realURL
+        self.authHeader = "Basic " + Data("\(user):\(password)".utf8).base64EncodedString()
+        super.init()
+    }
+
+    /// Build an AVURLAsset whose network loads are routed through this loader. Keep the returned
+    /// loader alive for the asset's lifetime (the asset holds only a weak delegate reference).
+    static func makeAsset(realURL: URL, user: String, password: String) -> (asset: AVURLAsset, loader: NCVideoStreamLoader)? {
+        guard var components = URLComponents(url: realURL, resolvingAgainstBaseURL: false) else { return nil }
+        components.scheme = scheme
+        guard let customURL = components.url else { return nil }
+        let loader = NCVideoStreamLoader(realURL: realURL, user: user, password: password)
+        let asset = AVURLAsset(url: customURL)
+        asset.resourceLoader.setDelegate(loader, queue: DispatchQueue(label: "com.ymnknet.privatecloud.videostream"))
+        return (asset, loader)
+    }
+
+    func invalidate() {
+        session.invalidateAndCancel()
+    }
+}
+
+extension NCVideoStreamLoader: AVAssetResourceLoaderDelegate {
+    func resourceLoader(_ resourceLoader: AVAssetResourceLoader,
+                        shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest) -> Bool {
+        var request = URLRequest(url: realURL)
+        request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        if let dataRequest = loadingRequest.dataRequest {
+            if dataRequest.requestsAllDataToEndOfResource {
+                request.setValue("bytes=\(dataRequest.requestedOffset)-", forHTTPHeaderField: "Range")
+            } else {
+                let end = dataRequest.requestedOffset + Int64(dataRequest.requestedLength) - 1
+                request.setValue("bytes=\(dataRequest.requestedOffset)-\(end)", forHTTPHeaderField: "Range")
+            }
+        } else {
+            request.setValue("bytes=0-1", forHTTPHeaderField: "Range")
+        }
+        let task = session.dataTask(with: request)
+        lock.lock()
+        pendingRequests[task.taskIdentifier] = loadingRequest
+        pendingTasks[task.taskIdentifier] = task
+        lock.unlock()
+        task.resume()
+        return true
+    }
+
+    func resourceLoader(_ resourceLoader: AVAssetResourceLoader,
+                        didCancel loadingRequest: AVAssetResourceLoadingRequest) {
+        lock.lock()
+        let identifier = pendingRequests.first { $0.value === loadingRequest }?.key
+        let task = identifier.flatMap { pendingTasks[$0] }
+        if let identifier {
+            pendingRequests[identifier] = nil
+            pendingTasks[identifier] = nil
+        }
+        lock.unlock()
+        task?.cancel()
+    }
+}
+
+extension NCVideoStreamLoader: URLSessionDataDelegate {
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
+            completionHandler(.useCredential, MDMCertificate.findIdentityCredential())
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        lock.lock(); let loadingRequest = pendingRequests[dataTask.taskIdentifier]; lock.unlock()
+        if let info = loadingRequest?.contentInformationRequest, let http = response as? HTTPURLResponse {
+            var total = response.expectedContentLength
+            if let contentRange = http.value(forHTTPHeaderField: "Content-Range"),
+               let slash = contentRange.lastIndex(of: "/"),
+               let parsed = Int64(contentRange[contentRange.index(after: slash)...].trimmingCharacters(in: .whitespaces)) {
+                total = parsed
+            }
+            info.contentLength = total
+            if let mime = http.value(forHTTPHeaderField: "Content-Type")?
+                .components(separatedBy: ";").first?
+                .trimmingCharacters(in: .whitespaces),
+               let uti = UTType(mimeType: mime) {
+                info.contentType = uti.identifier
+            }
+            info.isByteRangeAccessSupported = http.statusCode == 206
+                || (http.value(forHTTPHeaderField: "Accept-Ranges")?.range(of: "bytes", options: .caseInsensitive) != nil)
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.lock(); let loadingRequest = pendingRequests[dataTask.taskIdentifier]; lock.unlock()
+        loadingRequest?.dataRequest?.respond(with: data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        let loadingRequest = pendingRequests[task.taskIdentifier]
+        pendingRequests[task.taskIdentifier] = nil
+        pendingTasks[task.taskIdentifier] = nil
+        lock.unlock()
+        if let error = error as NSError?, error.code != NSURLErrorCancelled {
+            loadingRequest?.finishLoading(with: error)
+        } else if error == nil {
+            loadingRequest?.finishLoading()
+        }
+    }
+}
+
+// MARK: - PrivateCloud: short-video style AVPlayer view controller
+//
+// A self-contained fullscreen player built on a bare AVPlayerLayer so we own the gestures:
+// hold to play at 2x, double-tap left/right to skip -/+ 10s, single tap to toggle controls,
+// drag the scrubber to seek. If AVPlayer cannot decode the asset (unsupported codec) it calls
+// `onUnsupported` so the caller can fall back to the VLC download path.
+final class NCStreamPlayerViewController: UIViewController {
+    private let player = AVPlayer()
+    private let playerLayer = AVPlayerLayer()
+    private let playerItem: AVPlayerItem
+    private var streamLoader: NCVideoStreamLoader?
+    private let videoTitle: String
+
+    var onUnsupported: (() -> Void)?
+
+    private let controlsView = UIView()
+    private let topBar = UIView()
+    private let bottomBar = UIView()
+    private let closeButton = UIButton(type: .system)
+    private let titleLabel = UILabel()
+    private let playPauseButton = UIButton(type: .system)
+    private let scrubber = UISlider()
+    private let currentTimeLabel = UILabel()
+    private let durationLabel = UILabel()
+    private let spinner = UIActivityIndicatorView(style: .large)
+    private let speedBadge = UILabel()
+    private let skipBadge = UILabel()
+
+    private var timeObserver: Any?
+    private var statusObservation: NSKeyValueObservation?
+    private var timeControlObservation: NSKeyValueObservation?
+    private var controlsHideTimer: Timer?
+    private var skipBadgeTimer: Timer?
+    private var isScrubbing = false
+    private var wasPlayingBeforeSpeedUp = false
+    private var didFinishFallback = false
+
+    init(asset: AVURLAsset, loader: NCVideoStreamLoader?, title: String) {
+        self.playerItem = AVPlayerItem(asset: asset)
+        self.streamLoader = loader
+        self.videoTitle = title
+        super.init(nibName: nil, bundle: nil)
+        player.replaceCurrentItem(with: playerItem)
+        modalPresentationStyle = .fullScreen
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit {
+        if let timeObserver { player.removeTimeObserver(timeObserver) }
+        statusObservation?.invalidate()
+        timeControlObservation?.invalidate()
+        controlsHideTimer?.invalidate()
+        skipBadgeTimer?.invalidate()
+        player.pause()
+        streamLoader?.invalidate()
+    }
+
+    override var prefersStatusBarHidden: Bool { true }
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+
+        playerLayer.player = player
+        playerLayer.videoGravity = .resizeAspect
+        view.layer.addSublayer(playerLayer)
+
+        setupControls()
+        setupGestures()
+        observePlayer()
+
+        spinner.startAnimating()
+        player.play()
+        scheduleControlsHide()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        playerLayer.frame = view.bounds
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        player.pause()
+    }
+
+    // MARK: Setup
+
+    private func setupControls() {
+        controlsView.frame = view.bounds
+        controlsView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(controlsView)
+
+        // dimming so controls stay legible over bright frames
+        let dim = UIView()
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0.25)
+        dim.frame = controlsView.bounds
+        dim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        controlsView.addSubview(dim)
+
+        closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
+        closeButton.tintColor = .white
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+        controlsView.addSubview(closeButton)
+
+        titleLabel.text = videoTitle
+        titleLabel.textColor = .white
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        controlsView.addSubview(titleLabel)
+
+        playPauseButton.setImage(UIImage(systemName: "pause.fill"), for: .normal)
+        playPauseButton.tintColor = .white
+        playPauseButton.translatesAutoresizingMaskIntoConstraints = false
+        playPauseButton.addTarget(self, action: #selector(togglePlayPause), for: .touchUpInside)
+        playPauseButton.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 44, weight: .regular)
+        controlsView.addSubview(playPauseButton)
+
+        currentTimeLabel.text = "0:00"
+        durationLabel.text = "0:00"
+        for label in [currentTimeLabel, durationLabel] {
+            label.textColor = .white
+            label.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+            label.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        scrubber.minimumTrackTintColor = .white
+        scrubber.translatesAutoresizingMaskIntoConstraints = false
+        scrubber.addTarget(self, action: #selector(scrubChanged), for: .valueChanged)
+        scrubber.addTarget(self, action: #selector(scrubBegan), for: .touchDown)
+        scrubber.addTarget(self, action: #selector(scrubEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+
+        bottomBar.translatesAutoresizingMaskIntoConstraints = false
+        controlsView.addSubview(bottomBar)
+        bottomBar.addSubview(currentTimeLabel)
+        bottomBar.addSubview(scrubber)
+        bottomBar.addSubview(durationLabel)
+
+        spinner.color = .white
+        spinner.hidesWhenStopped = true
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(spinner)
+
+        speedBadge.text = "2x  ▶▶"
+        speedBadge.textColor = .white
+        speedBadge.font = .systemFont(ofSize: 13, weight: .bold)
+        speedBadge.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        speedBadge.textAlignment = .center
+        speedBadge.layer.cornerRadius = 6
+        speedBadge.clipsToBounds = true
+        speedBadge.isHidden = true
+        speedBadge.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(speedBadge)
+
+        skipBadge.textColor = .white
+        skipBadge.font = .systemFont(ofSize: 16, weight: .bold)
+        skipBadge.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        skipBadge.textAlignment = .center
+        skipBadge.layer.cornerRadius = 22
+        skipBadge.clipsToBounds = true
+        skipBadge.isHidden = true
+        skipBadge.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(skipBadge)
+
+        let guide = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            closeButton.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 16),
+            closeButton.topAnchor.constraint(equalTo: guide.topAnchor, constant: 8),
+            closeButton.widthAnchor.constraint(equalToConstant: 32),
+            closeButton.heightAnchor.constraint(equalToConstant: 32),
+
+            titleLabel.leadingAnchor.constraint(equalTo: closeButton.trailingAnchor, constant: 12),
+            titleLabel.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: guide.trailingAnchor, constant: -16),
+
+            playPauseButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            playPauseButton.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+
+            spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+
+            speedBadge.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            speedBadge.topAnchor.constraint(equalTo: guide.topAnchor, constant: 24),
+            speedBadge.widthAnchor.constraint(equalToConstant: 80),
+            speedBadge.heightAnchor.constraint(equalToConstant: 28),
+
+            skipBadge.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            skipBadge.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            skipBadge.widthAnchor.constraint(equalToConstant: 88),
+            skipBadge.heightAnchor.constraint(equalToConstant: 44),
+
+            bottomBar.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 16),
+            bottomBar.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -16),
+            bottomBar.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -12),
+            bottomBar.heightAnchor.constraint(equalToConstant: 34),
+
+            currentTimeLabel.leadingAnchor.constraint(equalTo: bottomBar.leadingAnchor),
+            currentTimeLabel.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor),
+
+            durationLabel.trailingAnchor.constraint(equalTo: bottomBar.trailingAnchor),
+            durationLabel.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor),
+
+            scrubber.leadingAnchor.constraint(equalTo: currentTimeLabel.trailingAnchor, constant: 10),
+            scrubber.trailingAnchor.constraint(equalTo: durationLabel.leadingAnchor, constant: -10),
+            scrubber.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor)
+        ])
+    }
+
+    private func setupGestures() {
+        let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap))
+        singleTap.numberOfTapsRequired = 1
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        singleTap.require(toFail: doubleTap)
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        longPress.minimumPressDuration = 0.35
+        view.addGestureRecognizer(singleTap)
+        view.addGestureRecognizer(doubleTap)
+        view.addGestureRecognizer(longPress)
+    }
+
+    private func observePlayer() {
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] time in
+            self?.updateTime(current: time)
+        }
+        statusObservation = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async { self?.handleStatus(item.status) }
+        }
+        timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            DispatchQueue.main.async { self?.handleTimeControl(player.timeControlStatus) }
+        }
+    }
+
+    // MARK: Player state
+
+    private func handleStatus(_ status: AVPlayerItem.Status) {
+        switch status {
+        case .readyToPlay:
+            let seconds = playerItem.duration.seconds
+            if seconds.isFinite, seconds > 0 {
+                scrubber.maximumValue = Float(seconds)
+                durationLabel.text = Self.formatTime(seconds)
+            }
+        case .failed:
+            fallbackToDownload()
+        default:
+            break
+        }
+    }
+
+    private func handleTimeControl(_ status: AVPlayer.TimeControlStatus) {
+        if status == .waitingToPlayAtSpecifiedRate {
+            spinner.startAnimating()
+        } else {
+            spinner.stopAnimating()
+        }
+        if status == .paused {
+            playPauseButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
+        } else {
+            playPauseButton.setImage(UIImage(systemName: "pause.fill"), for: .normal)
+        }
+    }
+
+    private func updateTime(current: CMTime) {
+        guard !isScrubbing else { return }
+        let seconds = current.seconds
+        if seconds.isFinite {
+            scrubber.value = Float(seconds)
+            currentTimeLabel.text = Self.formatTime(seconds)
+        }
+    }
+
+    private func fallbackToDownload() {
+        guard !didFinishFallback else { return }
+        didFinishFallback = true
+        let handler = onUnsupported
+        dismiss(animated: false) { handler?() }
+    }
+
+    // MARK: Actions
+
+    @objc private func closeTapped() {
+        player.pause()
+        dismiss(animated: true)
+    }
+
+    @objc private func togglePlayPause() {
+        if player.timeControlStatus == .paused {
+            player.play()
+        } else {
+            player.pause()
+        }
+        scheduleControlsHide()
+    }
+
+    @objc private func scrubBegan() {
+        isScrubbing = true
+        controlsHideTimer?.invalidate()
+    }
+
+    @objc private func scrubChanged() {
+        currentTimeLabel.text = Self.formatTime(Double(scrubber.value))
+    }
+
+    @objc private func scrubEnded() {
+        player.seek(to: CMTime(seconds: Double(scrubber.value), preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        isScrubbing = false
+        scheduleControlsHide()
+    }
+
+    // MARK: Gestures
+
+    @objc private func handleSingleTap() {
+        setControlsHidden(controlsView.alpha > 0.5)
+    }
+
+    @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+        let x = gesture.location(in: view).x
+        let forward = x > view.bounds.width / 2
+        seek(by: forward ? 10 : -10)
+        showSkipBadge(forward: forward)
+    }
+
+    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            wasPlayingBeforeSpeedUp = player.timeControlStatus == .playing
+            player.rate = 2.0
+            speedBadge.isHidden = false
+        case .ended, .cancelled, .failed:
+            player.rate = wasPlayingBeforeSpeedUp ? 1.0 : 0.0
+            speedBadge.isHidden = true
+        default:
+            break
+        }
+    }
+
+    private func seek(by seconds: Double) {
+        let current = player.currentTime().seconds
+        var target = current + seconds
+        let duration = playerItem.duration.seconds
+        if duration.isFinite { target = min(target, duration) }
+        target = max(0, target)
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    // MARK: Controls visibility
+
+    private func setControlsHidden(_ hidden: Bool) {
+        UIView.animate(withDuration: 0.2) { self.controlsView.alpha = hidden ? 0 : 1 }
+        if !hidden { scheduleControlsHide() }
+    }
+
+    private func scheduleControlsHide() {
+        controlsHideTimer?.invalidate()
+        controlsHideTimer = Timer.scheduledTimer(withTimeInterval: 3.5, repeats: false) { [weak self] _ in
+            guard let self, self.player.timeControlStatus == .playing, !self.isScrubbing else { return }
+            UIView.animate(withDuration: 0.2) { self.controlsView.alpha = 0 }
+        }
+    }
+
+    private func showSkipBadge(forward: Bool) {
+        skipBadge.text = forward ? "+10s ⏩" : "⏪ -10s"
+        skipBadge.isHidden = false
+        skipBadge.alpha = 1
+        skipBadgeTimer?.invalidate()
+        skipBadgeTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
+            UIView.animate(withDuration: 0.2, animations: { self?.skipBadge.alpha = 0 }) { _ in
+                self?.skipBadge.isHidden = true
+            }
+        }
+    }
+
+    private static func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let total = Int(seconds)
+        let h = total / 3600, m = (total % 3600) / 60, s = total % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
 }
