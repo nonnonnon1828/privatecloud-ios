@@ -31,6 +31,7 @@ class NCMediaCell: UICollectionViewCell {
 
     let videoBadgeView = UIImageView()
     let videoCenterPlay = UIImageView()
+    let selectionMark = UIImageView()
     var ocId: String = ""
     var date: Date?
 
@@ -50,18 +51,22 @@ class NCMediaCell: UICollectionViewCell {
         imageItem.image = nil
         videoBadgeView.isHidden = true
         videoCenterPlay.isHidden = true
+        selectionMark.isHidden = true
+        imageSelect.alpha = 0
 
         imageVisualEffect.isHidden = false
         imageVisualEffect.effect = nil
         imageVisualEffect.alpha = 0
         imageVisualEffect.isUserInteractionEnabled = false
-        imageVisualEffect.backgroundColor = UIColor.white.withAlphaComponent(0.2)
+        // PrivateCloud: selection dims the tile (gray-out) rather than a light tint.
+        imageVisualEffect.backgroundColor = UIColor.black.withAlphaComponent(0.5)
     }
 
     func selected(_ status: Bool, color: UIColor) {
+        // PrivateCloud: selection = grayed-out tile + a large yellow check (clearer than the old tint).
         imageVisualEffect.alpha = status ? 1 : 0
-        imageSelect.alpha = status ? 1 : 0
-        imageSelect.image = NCImageCache.shared.getImageCheckedYes(color: color)
+        selectionMark.isHidden = !status
+        imageSelect.alpha = 0
     }
 
     // PrivateCloud: make videos easy to tell apart from photos. A small marker sits in the
@@ -88,8 +93,19 @@ class NCMediaCell: UICollectionViewCell {
         videoCenterPlay.layer.shadowRadius = 3
         videoCenterPlay.layer.shadowOffset = .zero
 
+        selectionMark.image = UIImage(systemName: "checkmark.circle.fill")
+        selectionMark.tintColor = .systemYellow
+        selectionMark.contentMode = .scaleAspectFit
+        selectionMark.isHidden = true
+        selectionMark.translatesAutoresizingMaskIntoConstraints = false
+        selectionMark.layer.shadowColor = UIColor.black.cgColor
+        selectionMark.layer.shadowOpacity = 0.6
+        selectionMark.layer.shadowRadius = 3
+        selectionMark.layer.shadowOffset = .zero
+
         contentView.addSubview(videoCenterPlay)
         contentView.addSubview(videoBadgeView)
+        contentView.addSubview(selectionMark)
 
         NSLayoutConstraint.activate([
             videoBadgeView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 5),
@@ -100,7 +116,12 @@ class NCMediaCell: UICollectionViewCell {
             videoCenterPlay.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             videoCenterPlay.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             videoCenterPlay.widthAnchor.constraint(equalToConstant: 44),
-            videoCenterPlay.heightAnchor.constraint(equalToConstant: 44)
+            videoCenterPlay.heightAnchor.constraint(equalToConstant: 44),
+
+            selectionMark.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),
+            selectionMark.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6),
+            selectionMark.widthAnchor.constraint(equalToConstant: 38),
+            selectionMark.heightAnchor.constraint(equalToConstant: 38)
         ])
     }
 

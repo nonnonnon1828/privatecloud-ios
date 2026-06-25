@@ -40,6 +40,9 @@ class NCMedia: UIViewController {
     var videoImage = UIImage()
     var pinchGesture: UIPinchGestureRecognizer = UIPinchGestureRecognizer()
     var longPressSelectGesture = UILongPressGestureRecognizer()
+    var autoScrollLink: CADisplayLink?
+    var autoScrollSpeed: CGFloat = 0
+    var lastTouchInView: CGPoint = .zero
 
     var lastScale: CGFloat = 1.0
     var currentScale: CGFloat = 1.0

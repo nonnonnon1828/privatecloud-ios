@@ -209,11 +209,9 @@ extension NCMedia: UIGestureRecognizerDelegate {
     /// Long-press a photo to enter selection, then drag a finger across the grid to select many
     /// items in one stroke. Scrolling is suspended while painting so the drag doesn't scroll.
     @objc func handleLongPressSelect(_ gesture: UILongPressGestureRecognizer) {
-        let point = gesture.location(in: collectionView)
-
         switch gesture.state {
         case .began:
-            guard collectionView.indexPathForItem(at: point) != nil else {
+            guard collectionView.indexPathForItem(at: gesture.location(in: collectionView)) != nil else {
                 return
             }
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -221,12 +219,56 @@ extension NCMedia: UIGestureRecognizerDelegate {
                 setEditMode(true)
             }
             collectionView.isScrollEnabled = false
-            paintSelect(at: point)
+            lastTouchInView = gesture.location(in: view)
+            paintSelect(at: gesture.location(in: collectionView))
         case .changed:
-            paintSelect(at: point)
+            lastTouchInView = gesture.location(in: view)
+            paintSelect(at: gesture.location(in: collectionView))
+            updateAutoScroll()
         default:
+            stopAutoScroll()
             collectionView.isScrollEnabled = true
         }
+    }
+
+    // PrivateCloud: drag-to-select auto-scrolls when the finger nears the top/bottom edge, so you can
+    // keep selecting beyond the visible tiles (Apple Photos style) without lifting the finger.
+    private func updateAutoScroll() {
+        let edge: CGFloat = 90
+        let maxSpeed: CGFloat = 18
+        let frame = collectionView.frame
+        let y = lastTouchInView.y
+        if y < frame.minY + edge {
+            autoScrollSpeed = -maxSpeed * min(1, (frame.minY + edge - y) / edge)
+            startAutoScroll()
+        } else if y > frame.maxY - edge {
+            autoScrollSpeed = maxSpeed * min(1, (y - (frame.maxY - edge)) / edge)
+            startAutoScroll()
+        } else {
+            stopAutoScroll()
+        }
+    }
+
+    private func startAutoScroll() {
+        guard autoScrollLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(autoScrollTick))
+        link.add(to: .main, forMode: .common)
+        autoScrollLink = link
+    }
+
+    func stopAutoScroll() {
+        autoScrollLink?.invalidate()
+        autoScrollLink = nil
+        autoScrollSpeed = 0
+    }
+
+    @objc private func autoScrollTick() {
+        let minOffset = -collectionView.adjustedContentInset.top
+        let maxOffset = max(minOffset, collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom)
+        let newY = min(maxOffset, max(minOffset, collectionView.contentOffset.y + autoScrollSpeed))
+        guard newY != collectionView.contentOffset.y else { return }
+        collectionView.contentOffset.y = newY
+        paintSelect(at: collectionView.convert(lastTouchInView, from: view))
     }
 
     private func paintSelect(at point: CGPoint) {
