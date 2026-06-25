@@ -47,7 +47,8 @@ class NCMainTabBarController: UITabBarController {
 
         tabBar.tintColor = NCBrandColor.shared.getElement(account: account)
 
-        configureMoreController()
+        // PrivateCloud: the "More" tab is removed; its only kept settings (appearance + clear cache)
+        // live in the account menu now, leaving four simple tabs.
         configureTabBarItems()
         configureTabBarAppearance()
         setupTabSwipeGestures()

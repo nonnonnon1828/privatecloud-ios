@@ -142,7 +142,40 @@ class NCFilesNavigationController: NCMainNavigationController {
             childrenAccountSubmenu.append(settingsAccountAction)
 
             let addAccountSubmenu = UIMenu(title: "", options: .displayInline, children: childrenAccountSubmenu)
-            let menu = UIMenu(children: accountActions + [addAccountSubmenu])
+
+            // PrivateCloud: appearance (light/dark/system) + clear cache, moved here from the
+            // removed "More" tab so the only settings worth keeping stay one tap away.
+            let prefs = NCPreferences()
+            let isAuto = prefs.appearanceAutomatic
+            let currentStyle = prefs.appearanceInterfaceStyle
+            let autoAction = UIAction(title: NSLocalizedString("_use_system_style_", comment: ""),
+                                      image: utility.loadImage(named: "circle.lefthalf.filled", colors: [NCBrandColor.shared.iconImageColor]),
+                                      state: isAuto ? .on : .off) { _ in
+                NCPreferences().appearanceAutomatic = true
+                self.applyInterfaceStyle(.unspecified)
+            }
+            let lightAction = UIAction(title: NSLocalizedString("_light_", comment: ""),
+                                       image: utility.loadImage(named: "sun.max", colors: [NCBrandColor.shared.iconImageColor]),
+                                       state: (!isAuto && currentStyle == .light) ? .on : .off) { _ in
+                let pref = NCPreferences(); pref.appearanceAutomatic = false; pref.appearanceInterfaceStyle = .light
+                self.applyInterfaceStyle(.light)
+            }
+            let darkAction = UIAction(title: NSLocalizedString("_dark_", comment: ""),
+                                      image: utility.loadImage(named: "moon.fill", colors: [NCBrandColor.shared.iconImageColor]),
+                                      state: (!isAuto && currentStyle == .dark) ? .on : .off) { _ in
+                let pref = NCPreferences(); pref.appearanceAutomatic = false; pref.appearanceInterfaceStyle = .dark
+                self.applyInterfaceStyle(.dark)
+            }
+            let appearanceSubmenu = UIMenu(title: NSLocalizedString("_appearance_", comment: ""),
+                                           image: utility.loadImage(named: "circle.lefthalf.filled", colors: [NCBrandColor.shared.iconImageColor]),
+                                           children: [autoAction, lightAction, darkAction])
+            let clearCacheAction = UIAction(title: NSLocalizedString("_clear_cache_", comment: ""),
+                                            image: utility.loadImage(named: "trash", colors: [NCBrandColor.shared.iconImageColor])) { _ in
+                self.confirmClearCache()
+            }
+            let appSettingsSubmenu = UIMenu(title: "", options: .displayInline, children: [appearanceSubmenu, clearCacheAction])
+
+            let menu = UIMenu(children: accountActions + [addAccountSubmenu, appSettingsSubmenu])
 
             return menu
         }
@@ -174,5 +207,39 @@ class NCFilesNavigationController: NCMainNavigationController {
             accountButton?.setImage(image, for: .normal)
             accountButton?.menu = await createLeftMenu()
         }
+    }
+
+    // MARK: - PrivateCloud account-menu helpers (appearance + clear cache, ex-"More" tab)
+
+    private func applyInterfaceStyle(_ style: UIUserInterfaceStyle) {
+        for windowScene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for window in windowScene.windows {
+                window.overrideUserInterfaceStyle = style
+            }
+        }
+    }
+
+    private func confirmClearCache() {
+        let alert = UIAlertController(title: NSLocalizedString("_clear_cache_", comment: ""), message: nil, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: NSLocalizedString("_cancel_", comment: ""), style: .cancel))
+        alert.addAction(UIAlertAction(title: NSLocalizedString("_clear_cache_", comment: ""), style: .destructive) { _ in
+            Task { @MainActor in
+                NCActivityIndicator.shared.startActivity(backgroundView: self.controller?.view, style: .large, blurEffect: true)
+                NCNetworking.shared.cancelAllTask()
+                try? await Task.sleep(for: .seconds(1))
+                NCNetworking.shared.removeServerErrorAccount(self.session.account)
+                NCManageDatabase.shared.clearDBCache()
+                let ufs = NCUtilityFileSystem()
+                ufs.removeGroupDirectoryProviderStorage()
+                ufs.removeGroupLibraryDirectory()
+                ufs.removeDocumentsDirectory()
+                ufs.removeTemporaryDirectory()
+                ufs.createDirectoryStandard()
+                await NCService().startRequestServicesServer(account: self.session.account, controller: self.controller)
+                NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterClearCache)
+                NCActivityIndicator.shared.stop()
+            }
+        })
+        self.present(alert, animated: true)
     }
 }
