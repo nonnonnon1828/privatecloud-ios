@@ -103,23 +103,82 @@ class NCMainTabBarController: UITabBarController {
         tabBar.scrollEdgeAppearance = appearance
     }
 
-    // PrivateCloud: swipe left/right to move between the main tabs. Gated (see
-    // gestureRecognizerShouldBegin) so it only acts at a tab's root grid, never while selecting,
-    // drilled into a detail/viewer, or with something presented — where it would fight other gestures.
+    // PrivateCloud: Instagram-style horizontal paging between the main tabs. The content tracks the
+    // finger and the adjacent tab slides in; a light haptic confirms the change. A direction lock
+    // (see gestureRecognizerShouldBegin) only starts the pan for clearly horizontal drags, so it is
+    // never confused with vertical scrolling. Gated to a tab's root (not while selecting, drilled
+    // into a detail/viewer, or with something presented). Tapping the tab bar always still works.
+    private var tabPanTargetIndex: Int?
+    private var tabPanTargetView: UIView?
+
     private func setupTabSwipeGestures() {
-        for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
-            let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleTabSwipe(_:)))
-            swipe.direction = direction
-            swipe.delegate = self
-            view.addGestureRecognizer(swipe)
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleTabPan(_:)))
+        pan.delegate = self
+        view.addGestureRecognizer(pan)
+    }
+
+    @objc private func handleTabPan(_ gesture: UIPanGestureRecognizer) {
+        guard let currentView = selectedViewController?.view else { return }
+        let translationX = gesture.translation(in: view).x
+        let width = max(view.bounds.width, 1)
+
+        switch gesture.state {
+        case .changed:
+            if tabPanTargetIndex == nil {
+                guard abs(translationX) > 1 else { return }
+                let target = translationX < 0 ? selectedIndex + 1 : selectedIndex - 1
+                guard let count = viewControllers?.count, target >= 0, target < count,
+                      let targetView = viewControllers?[target].view else { return }
+                tabPanTargetIndex = target
+                tabPanTargetView = targetView
+                targetView.frame = currentView.frame
+                view.insertSubview(targetView, belowSubview: tabBar)
+            }
+            guard let target = tabPanTargetIndex, let targetView = tabPanTargetView else { return }
+            let forward = target > selectedIndex
+            let clamped = forward ? min(0, translationX) : max(0, translationX)
+            let base = forward ? width : -width
+            currentView.transform = CGAffineTransform(translationX: clamped, y: 0)
+            targetView.transform = CGAffineTransform(translationX: base + clamped, y: 0)
+        case .ended, .cancelled, .failed:
+            finishTabPan(translationX: translationX, velocityX: gesture.velocity(in: view).x, width: width, currentView: currentView)
+        default:
+            break
         }
     }
 
-    @objc private func handleTabSwipe(_ gesture: UISwipeGestureRecognizer) {
-        guard let count = viewControllers?.count, count > 0 else { return }
-        let index = gesture.direction == .left ? selectedIndex + 1 : selectedIndex - 1
-        guard index >= 0, index < count, index != selectedIndex else { return }
-        selectedIndex = index
+    private func finishTabPan(translationX: CGFloat, velocityX: CGFloat, width: CGFloat, currentView: UIView) {
+        guard let target = tabPanTargetIndex, let targetView = tabPanTargetView else {
+            resetTabPan()
+            return
+        }
+        let forward = target > selectedIndex
+        let base = forward ? width : -width
+        let commit = abs(translationX) / width > 0.3 || abs(velocityX) > 800
+        if commit {
+            UISelectionFeedbackGenerator().selectionChanged()
+            UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut, animations: {
+                currentView.transform = CGAffineTransform(translationX: -base, y: 0)
+                targetView.transform = .identity
+            }, completion: { _ in
+                self.selectedIndex = target
+                currentView.transform = .identity
+                self.resetTabPan()
+            })
+        } else {
+            UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut, animations: {
+                currentView.transform = .identity
+                targetView.transform = CGAffineTransform(translationX: base, y: 0)
+            }, completion: { _ in
+                targetView.removeFromSuperview()
+                self.resetTabPan()
+            })
+        }
+    }
+
+    private func resetTabPan() {
+        tabPanTargetIndex = nil
+        tabPanTargetView = nil
     }
 
     private func configureMoreController() {
@@ -260,6 +319,14 @@ extension NCMainTabBarController: UIGestureRecognizerDelegate {
     /// Allow the tab swipe only at a tab's root grid: not while something is presented, not when
     /// drilled into a detail/viewer (pushed), and not in selection mode (drag-to-select conflicts).
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        // Direction lock: only begin for a clearly horizontal drag, so vertical scrolling is never
+        // taken for a tab change (this is what keeps the two gestures from being confused).
+        if let pan = gestureRecognizer as? UIPanGestureRecognizer {
+            let velocity = pan.velocity(in: view)
+            if abs(velocity.x) < abs(velocity.y) * 1.25 {
+                return false
+            }
+        }
         if presentedViewController != nil {
             return false
         }
@@ -275,6 +342,13 @@ extension NCMainTabBarController: UIGestureRecognizerDelegate {
         if let media = navigationController.topViewController as? NCMedia, media.isEditMode {
             return false
         }
+        return true
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        // Let the tab pan begin alongside a scroll view's pan; the direction lock above keeps them on
+        // separate axes (horizontal = tabs, vertical = scrolling), so they don't fight.
         return true
     }
 }
