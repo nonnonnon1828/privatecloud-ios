@@ -64,7 +64,7 @@ final class NCBrandOptions: @unchecked Sendable {
     var brandUserAgent: String = "PrivateCloud"
     var textCopyrightNextcloudiOS: String = "PrivateCloud for iOS %@ © 2026"
     var textCopyrightNextcloudServer: String = "Nextcloud Server %@"
-    var loginBaseUrl: String = "https://sv1-cloud.ymnk-private-connect.com"
+    var loginBaseUrl: String = "https://sv1-cloud.ymnknet.com"
     var pushNotificationServerProxy: String = ""
     var linkLoginHost: String = ""
     var linkloginPreferredProviders: String = ""
@@ -101,7 +101,7 @@ final class NCBrandOptions: @unchecked Sendable {
     var enforce_passcode_lock = false
     var enforce_privacyScreenEnabled = false
 
-    var enforce_servers: [(name: String, url: String)] = [(name: "PrivateCloud", url: "https://sv1-cloud.ymnk-private-connect.com")]
+    var enforce_servers: [(name: String, url: String)] = [(name: "PrivateCloud", url: "https://sv1-cloud.ymnknet.com")]
 
     // Internal option behaviour
     var cleanUpDay: Int = 0 // Set default "Delete all cached files older than". Possible days value are: 0, 1, 7, 30, 90, 180, 365

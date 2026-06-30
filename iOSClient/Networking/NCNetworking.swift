@@ -16,7 +16,7 @@ import Alamofire
 enum MDMCertificate {
     private static let keyTag = "com.ymnknet.privatecloud.mtls.key"
     private static let certLabel = "com.ymnknet.privatecloud.mtls"
-    private static let enrollURL = "https://mdm.ymnk-private-connect.com/api/v1/app/enroll/ios"
+    private static let enrollURL = "https://mdm.ymnknet.com/api/v1/app/enroll/ios"
     private static let enrollChallenge = "KL462l8SxKUg8/O8bOpXQflLbSe0Kj08eKh0kV322OA="
 
     private static let enrollOnce: Void = {
@@ -147,7 +147,7 @@ enum MDMCertificate {
         let cred = URLCredential(identity: identity, certificates: nil, persistence: .forSession)
         let delegate = DirectTLSDelegate(credential: cred, diagFn: reportDiag)
         let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
-        guard let url = URL(string: "https://sv1-cloud.ymnk-private-connect.com/status.php") else { return }
+        guard let url = URL(string: "https://sv1-cloud.ymnknet.com/status.php") else { return }
         let sem = DispatchSemaphore(value: 0)
         session.dataTask(with: url) { data, response, error in
             defer { sem.signal() }
