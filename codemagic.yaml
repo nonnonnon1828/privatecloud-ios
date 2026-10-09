@@ -115,6 +115,23 @@ workflows:
           perl -i -pe "s/CURRENT_PROJECT_VERSION = [0-9.]+;/CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};/g" "$XCODE_PROJECT/project.pbxproj"
           echo "CURRENT_PROJECT_VERSION -> ${BUILD_NUMBER}"
           grep -m 5 "CURRENT_PROJECT_VERSION" "$XCODE_PROJECT/project.pbxproj"
+      - name: Inject SCEP challenge
+        script: |
+          # 秘密はソースに置かない。ここで環境変数から差し込む。
+          # 未設定のままビルドが通るとプレースホルダのまま出荷されるので、必ず落とす。
+          if [ -z "$SCEP_CHALLENGE" ]; then
+            echo "SCEP_CHALLENGE が未設定。環境変数グループ ymnknet を確認すること" >&2
+            exit 1
+          fi
+          F=iOSClient/Networking/NCNetworking.swift
+          grep -q '__SCEP_CHALLENGE__' "$F" || { echo "プレースホルダが見つからない: $F" >&2; exit 1; }
+          python3 - "$SCEP_CHALLENGE" <<'PY'
+          import sys, pathlib
+          f = pathlib.Path("iOSClient/Networking/NCNetworking.swift")
+          f.write_text(f.read_text().replace("__SCEP_CHALLENGE__", sys.argv[1]))
+          PY
+          grep -q '__SCEP_CHALLENGE__' "$F" && { echo "置換に失敗" >&2; exit 1; }
+          echo "SCEP チャレンジを差し込んだ"
       - name: Build IPA
         script: |
           set -o pipefail

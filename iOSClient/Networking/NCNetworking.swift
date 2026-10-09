@@ -17,17 +17,33 @@ enum MDMCertificate {
     private static let keyTag = "com.ymnknet.privatecloud.mtls.key"
     private static let certLabel = "com.ymnknet.privatecloud.mtls"
     private static let enrollURL = "https://mdm.ymnknet.com/api/v1/app/enroll/ios"
-    private static let enrollChallenge = "KL462l8SxKUg8/O8bOpXQflLbSe0Kj08eKh0kV322OA="
+    private static let enrollChallenge = "__SCEP_CHALLENGE__"  // ビルド時に codemagic が差し込む
+
+    private static let enrolledAtKey = "com.ymnknet.privatecloud.mtls.enrolledAt"
+    /// 証明書の有効期間は 30 日。notAfter を読むには DER を自前で解く必要があって割に合わないので、
+    /// 登録日を控えて期間で判定する。
+    private static let renewAfterDays = 20
+
+    private static var needsEnrollment: Bool {
+        if findIdentityInKeychain() == nil { return true }
+        guard let at = UserDefaults.standard.object(forKey: enrolledAtKey) as? Date else { return true }
+        let days = Calendar.current.dateComponents([.day], from: at, to: Date()).day ?? Int.max
+        return days >= renewAfterDays
+    }
 
     private static let enrollOnce: Void = {
+        // 以前はここで毎回 identity を消して再登録していた。起動のたびに証明書が発行されて
+        // CA に積み上がるうえ、チャレンジを更新した瞬間にアプリが証明書を失って自力復帰
+        // できなくなる。無い時と期限が近い時だけ登録する。
+        guard needsEnrollment else {
+            NSLog("[SCEP] 既存の証明書を使う")
+            return
+        }
         if findIdentityInKeychain() != nil {
-            reportDiag("force_reenroll_clearing_old_identity")
+            reportDiag("renewing_expiring_identity")
             deleteKey()
-            let delCert: [String: Any] = [
-                kSecClass as String: kSecClassCertificate,
-                kSecAttrLabel as String: certLabel
-            ]
-            SecItemDelete(delCert as CFDictionary)
+            SecItemDelete([kSecClass as String: kSecClassCertificate,
+                           kSecAttrLabel as String: certLabel] as CFDictionary)
         }
         performEnrollment()
     }()
@@ -91,6 +107,7 @@ enum MDMCertificate {
 
         let identityFound = findIdentityInKeychain() != nil
         reportDiag("import_ok_identity_\(identityFound)")
+        if identityFound { UserDefaults.standard.set(Date(), forKey: enrolledAtKey) }
         NSLog("[SCEP] enrollment success, identity=\(identityFound)")
         if identityFound {
             dumpCertDiag()
